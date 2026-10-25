@@ -16,8 +16,6 @@ An Tâm hỗ trợ quản lý thuốc theo lô, nhập hàng, kiểm kê, bán h
 6. [Cài đặt và chạy trên Windows](#6-cài-đặt-và-chạy-trên-windows)
 7. [Cấu hình biến môi trường](#7-cấu-hình-biến-môi-trường)
 8. [Chạy và kiểm tra thủ công](#8-chạy-và-kiểm-tra-thủ-công)
-9. [Triển khai lên Render với PostgreSQL bên ngoài](#9-triển-khai-lên-render-với-postgresql-bên-ngoài)
-10. [Lưu ý bảo mật và dữ liệu](#10-lưu-ý-bảo-mật-và-dữ-liệu)
 
 ## 1. Giới thiệu
 
