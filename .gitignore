@@ -1,20 +1,25 @@
-# Python
-backend/.venv/
+# Python environments and caches
+.venv/
+**/.venv/
 **/__pycache__/
 *.pyc
 .pytest_cache/
+**/.pytest_cache/
 
-# Node
-frontend/node_modules/
+# Frontend build outputs
+**/node_modules/
 frontend/dist/
 
-# Bí mật/API key
-backend/.env
-frontend/.env
+# Secrets and local configuration (do not upload to GitHub)
 .env
+**/.env
+.env.*
+**/.env.*
+!**/.env.example
+!.env.example
 
-# IDE
+# Editors, logs and local data
 .vscode/
-
-# Logs
 *.log
+*.db
+*.sqlite3
