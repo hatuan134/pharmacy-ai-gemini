@@ -4,7 +4,6 @@
 
 An Tâm hỗ trợ quản lý thuốc theo lô, nhập hàng, kiểm kê, bán hàng, hóa đơn, thống kê và tra cứu thông tin bằng AI. Giao diện tiếng Việt; nghiệp vụ và quyền truy cập được xử lý ở backend. Dự án có thể chạy trên Windows bằng Docker Desktop hoặc triển khai một dịch vụ Docker trên Render, kết nối PostgreSQL bên ngoài (ví dụ Neon).
 
-> **Lưu ý:** README này mô tả mã nguồn `pharmacy-ai-gemini` được cung cấp, không mô tả dự án LIBRA (quản lý thư viện) từng có trong repository `DuAnTTCS_N5`. Hãy thay README khi mã nguồn nhà thuốc đã được đưa lên đúng repository/nhánh.
 
 ## Mục lục
 
