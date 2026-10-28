@@ -335,9 +335,60 @@ def report_payload(db, start: date, end: date):
     }
 
 
+
+def report_insights(db, start: date, end: date, report: dict):
+    """Manager-only report extras, calculated from paid invoices and live stock.
+
+    Sold quantities/revenue are aggregated from historical invoice items, not
+    from the mutable batch sale price; canceled invoices never contribute.
+    """
+    zone = ZoneInfo('Asia/Ho_Chi_Minh')
+    lower = datetime.combine(start, time.min, zone).astimezone(timezone.utc)
+    upper = datetime.combine(end + timedelta(days=1), time.min, zone).astimezone(timezone.utc)
+    best = db.execute(
+        select(
+            Medicine.id,
+            Medicine.name,
+            Unit.name,
+            func.sum(InvoiceItem.quantity).label('sold_quantity'),
+            func.sum(InvoiceItem.quantity * InvoiceItem.sale_price).label('sold_revenue'),
+        )
+        .select_from(InvoiceItem)
+        .join(Invoice, Invoice.id == InvoiceItem.invoice_id)
+        .join(Batch, Batch.id == InvoiceItem.batch_id)
+        .join(Medicine, Medicine.id == Batch.medicine_id)
+        .join(Unit, Unit.id == Medicine.unit_id)
+        .where(Invoice.status == 'paid', Invoice.created_at >= lower, Invoice.created_at < upper)
+        .group_by(Medicine.id, Medicine.name, Unit.name)
+        .order_by(func.sum(InvoiceItem.quantity).desc(), Medicine.name.asc())
+        .limit(5)
+    ).all()
+    stock = batch_rows(db, available=True)
+    warning = report['alerts']
+    return {
+        'top_medicines': [
+            {'medicine_id': med_id, 'name': name, 'unit': unit,
+             'quantity': int(qty), 'revenue': revenue}
+            for med_id, name, unit, qty, revenue in best
+        ],
+        'inventory': {
+            'as_of': today(),
+            'medicine_count': report['medicine_count'],
+            'available_batches': len(stock),
+            'available_units': sum(b['quantity'] for b in stock),
+            'expired_batches': sum(b['days_left'] <= 0 for b in warning['expiry']),
+            'expiring_batches': sum(0 < b['days_left'] <= 90 for b in warning['expiry']),
+            'low_stock_count': len(warning['low_stock']),
+        },
+    }
+
+
 @app.get('/api/reports')
 def reports(start: date | None = None, end: date | None = None, user=Depends(manager), db=Depends(get_db)):
-    return report_payload(db, start or today().replace(day=1), end or today())
+    start_date, end_date = start or today().replace(day=1), end or today()
+    report = report_payload(db, start_date, end_date)
+    report.update(report_insights(db, start_date, end_date, report))
+    return report
 
 
 @app.get('/api/dashboard')
