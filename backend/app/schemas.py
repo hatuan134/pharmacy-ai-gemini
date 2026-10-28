@@ -80,10 +80,6 @@ class Sale(Input):
 class Cancel(Input):
     reason: str = Field(min_length=5, max_length=500)
 
-class ProcedureIn(Input):
-    title: str = Field(min_length=1, max_length=200)
-    content: str = Field(min_length=1, max_length=12000)
-
 class AIRequest(Input):
     mode: Literal['summary', 'expiry', 'procedure']
     medicine_id: int | None = None
@@ -101,6 +97,3 @@ class AIChatRequest(Input):
     history: list[ChatMessage] = Field(default_factory=list, max_length=12)
 
 
-class MedicineApproval(Input):
-    approved: bool
-    revision: str = Field(min_length=64,max_length=64)

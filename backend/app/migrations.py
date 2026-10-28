@@ -1,7 +1,7 @@
 """Các migration dữ liệu nhỏ, chạy idempotent khi ứng dụng khởi động."""
 import re
-from sqlalchemy import update, select
-from .models import SchemaMigration, Medicine, Supplier
+from sqlalchemy import select
+from .models import SchemaMigration, Supplier
 
 
 def _insert_for(db):
@@ -24,14 +24,6 @@ def _collapse_repeated_name(value: str) -> str:
 
 def apply(db):
     insert = _insert_for(db)
-
-    result = db.execute(
-        insert(SchemaMigration)
-        .values(name='v4_review_medicine_sources')
-        .on_conflict_do_nothing()
-    )
-    if result.rowcount:
-        db.execute(update(Medicine).values(approved=False, approved_by=None))
 
     # Dọn dữ liệu nhà cung cấp đã nhập sai trước khi bổ sung validation số điện thoại.
     # Chỉ sửa các trường hợp rõ ràng: phone có chữ; tên bị lặp đúng 2 lần; địa chỉ trùng tên.

@@ -85,7 +85,7 @@ def test_fallback_is_explicitly_data_only_not_fake_ai_analysis():
     assert 'AI tạm thời không khả dụng' in answer
     assert 'Phần phân tích/tổng hợp bằng AI chưa được thực hiện' in answer
     assert 'Paracetamol 500mg' in answer
-    assert 'Quy trình nội bộ đã truy xuất' in answer
+    assert 'Quy trình nội bộ đã truy xuất' not in answer
     assert 'Đề xuất:' not in answer
     assert 'FEFO' not in answer
     assert 'expiry_alerts:' not in answer

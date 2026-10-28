@@ -105,56 +105,6 @@ class Movement(Base):
     reason: Mapped[str] = mapped_column(String(500), default='')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
-class Procedure(Base):
-    __tablename__ = 'procedures'
-    id: Mapped[int] = mapped_column(primary_key=True)
-    title: Mapped[str] = mapped_column(String(200))
-    content: Mapped[str] = mapped_column(Text)
-    approved: Mapped[bool] = mapped_column(default=False)
-    approved_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
-
-class AILog(Base):
-    __tablename__ = 'ai_logs'
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
-    mode: Mapped[str] = mapped_column(String(30))
-    prompt: Mapped[str] = mapped_column(Text)
-    response: Mapped[str] = mapped_column(Text)
-    sources: Mapped[str] = mapped_column(Text, default='[]')
-    status: Mapped[str] = mapped_column(String(30))
-    warning: Mapped[str] = mapped_column(Text)
-    model: Mapped[str] = mapped_column(String(80))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-
-
-class AuditLog(Base):
-    __tablename__ = 'audit_logs'
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True, index=True)
-    action: Mapped[str] = mapped_column(String(80), index=True)
-    entity: Mapped[str] = mapped_column(String(80), index=True)
-    entity_id: Mapped[int | None] = mapped_column(nullable=True)
-    details: Mapped[str] = mapped_column(Text, default='{}')
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
-
-class ApprovalRequest(Base):
-    __tablename__ = 'approval_requests'
-    id: Mapped[int] = mapped_column(primary_key=True)
-    requester_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
-    kind: Mapped[str] = mapped_column(String(40), index=True)
-    batch_id: Mapped[int] = mapped_column(ForeignKey('batches.id'), index=True)
-    payload: Mapped[str] = mapped_column(Text, default='{}')
-    reason: Mapped[str] = mapped_column(String(500), default='')
-    status: Mapped[str] = mapped_column(String(20), default='pending', index=True)
-    reviewer_id: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
-    review_note: Mapped[str] = mapped_column(String(500), default='')
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    __table_args__ = (
-        CheckConstraint("kind IN ('stock_adjustment','price_change')"),
-        CheckConstraint("status IN ('pending','approved','rejected')"),
-    )
-
 class AIConversation(Base):
     __tablename__ = 'ai_conversations'
     id: Mapped[int] = mapped_column(primary_key=True)

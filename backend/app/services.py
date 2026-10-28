@@ -15,15 +15,8 @@ def require(db, cls, ident):
         raise HTTPException(404, 'Không tìm thấy dữ liệu.')
     return obj
 
-def approval_revision(obj):
-    import hashlib, json
-    fields = ('code','name','category_id','unit_id','information','source','prescription_required','active')
-    return hashlib.sha256(json.dumps({k:getattr(obj,k) for k in fields},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
-
-
 def row(obj):
     result = {c.name:getattr(obj,c.name) for c in obj.__table__.columns if c.name != 'password_hash'}
-    if isinstance(obj, Medicine): result['approval_revision'] = approval_revision(obj)
     return result
 
 
@@ -121,43 +114,81 @@ def invoice_detail(db, invoice):
     return {**row(invoice), 'items': [row(i) for i in db.scalars(select(InvoiceItem).where(InvoiceItem.invoice_id == invoice.id))], 'seller': require(db, User, invoice.user_id).name}
 
 def create_sale(db, data, user):
+    """Atomic FEFO sale. Submitted line items are a price-confirmed FEFO quote.
+
+    The server recomputes the entire FEFO allocation while locking ALL lots of
+    the relevant medicines. It never trusts the client-selected batch to decide
+    which lot will be sold. A stale/non-FEFO quote must be refreshed and
+    confirmed again; otherwise a different batch price could be charged unseen.
+    """
     fingerprint = hashlib.sha256(json.dumps(data.model_dump(mode='json', exclude={'request_key'}), sort_keys=True).encode()).hexdigest()
-    # Serialize retries for the same operator; batch locks serialize different operators.
     db.scalar(select(User).where(User.id == user.id).with_for_update())
     previous = db.scalar(select(Invoice).where(Invoice.request_key == data.request_key))
     if previous:
         if previous.user_id != user.id or previous.request_hash != fingerprint:
             raise HTTPException(409, 'Mã thanh toán đã dùng cho yêu cầu khác.')
         return invoice_detail(db, previous)
-    amounts = defaultdict(int)
-    for item in data.items:
-        amounts[item.batch_id] += item.quantity
-    batches = list(db.scalars(select(Batch).where(Batch.id.in_(sorted(amounts))).order_by(Batch.id).with_for_update()))
-    if len(batches) != len(amounts):
+
+    selected_ids = sorted({i.batch_id for i in data.items})
+    selected = list(db.scalars(select(Batch).where(Batch.id.in_(selected_ids))))
+    if len(selected) != len(selected_ids):
         raise HTTPException(404, 'Lô thuốc không tồn tại.')
-    for item in data.items:
-        current = next(b for b in batches if b.id == item.batch_id)
-        if current.sale_price != item.expected_sale_price:
-            raise HTTPException(409, f'Giá lô {current.code} đã thay đổi. Tải lại tồn kho và thêm lại thuốc vào giỏ.')
-    total = Decimal('0')
-    medicines = {}
+    selected_by_id = {b.id: b for b in selected}
+    medicines_ids = sorted({b.medicine_id for b in selected})
+    # All batches belonging to the selected medicines are locked in a
+    # deterministic order, preventing concurrent sales from violating FEFO.
+    batches = list(db.scalars(select(Batch).where(Batch.medicine_id.in_(medicines_ids)).order_by(Batch.id).with_for_update()))
+    by_medicine = defaultdict(list)
     for batch in batches:
-        medicine = require(db, Medicine, batch.medicine_id)
-        medicines[batch.id] = medicine
-        if not medicine.active or batch.expiry_date <= today():
-            raise HTTPException(409, f'Lô {batch.code} hết hạn hoặc thuốc ngừng bán.')
-        if batch.quantity < amounts[batch.id]:
-            raise HTTPException(409, f'Lô {batch.code} chỉ còn {batch.quantity}.')
-        if medicine.prescription_required and (user.role == 'cashier' or not data.prescription_ref):
-            raise HTTPException(403, 'Thuốc kê đơn cần dược sĩ/quản lý kiểm tra và nhập mã đơn thuốc.')
-        total += batch.sale_price * amounts[batch.id]
-    invoice = Invoice(user_id=user.id, customer=data.customer or 'Khách lẻ', total=total, payment_method=data.payment_method, request_key=data.request_key, request_hash=fingerprint, prescription_ref=data.prescription_ref)
+        by_medicine[batch.medicine_id].append(batch)
+
+    desired = defaultdict(int)
+    quoted = defaultdict(int)
+    for item in data.items:
+        batch = selected_by_id[item.batch_id]
+        desired[batch.medicine_id] += item.quantity
+        quoted[batch.id] += item.quantity
+        if batch.sale_price != item.expected_sale_price:
+            raise HTTPException(409, f'Giá lô {batch.code} đã thay đổi. Tải lại tồn kho để xác nhận giá mới.')
+
+    allocation = {}
+    medicines = {}
+    for med_id, requested in desired.items():
+        medicine = require(db, Medicine, med_id)
+        medicines[med_id] = medicine
+        if not medicine.active:
+            raise HTTPException(409, f'Thuốc {medicine.name} đã ngừng bán.')
+        if medicine.prescription_required and (user.role == 'cashier' or not data.prescription_ref.strip()):
+            raise HTTPException(403, 'Thuốc kê đơn cần người có chuyên môn xác nhận đơn hợp lệ; Thu ngân không thể tự xử lý.')
+        remaining = requested
+        for batch in sorted(by_medicine[med_id], key=lambda b:(b.expiry_date, b.id)):
+            if batch.expiry_date <= today() or batch.quantity <= 0:
+                continue
+            take = min(remaining, batch.quantity)
+            if take:
+                allocation[batch.id] = take
+                remaining -= take
+            if not remaining:
+                break
+        if remaining:
+            raise HTTPException(409, f'Thuốc {medicine.name} không đủ tồn khả dụng theo FEFO. Vui lòng tải lại.')
+    if dict(quoted) != allocation:
+        raise HTTPException(409, 'Thứ tự xuất lô FEFO hoặc số lượng trong giỏ đã thay đổi. Tải lại tồn kho và xác nhận lại tổng tiền.')
+
+    total = sum((b.sale_price * allocation[b.id] for b in batches if b.id in allocation), Decimal('0'))
+    invoice = Invoice(user_id=user.id, customer=data.customer or 'Khách lẻ', total=total,
+                      payment_method=data.payment_method, request_key=data.request_key,
+                      request_hash=fingerprint, prescription_ref=data.prescription_ref)
     db.add(invoice)
     db.flush()
     for batch in batches:
-        qty = amounts[batch.id]
-        medicine = medicines[batch.id]
-        db.add(InvoiceItem(invoice_id=invoice.id, batch_id=batch.id, medicine_name=medicine.name, unit_name=require(db, Unit, medicine.unit_id).name, quantity=qty, sale_price=batch.sale_price, purchase_price=batch.purchase_price))
+        qty = allocation.get(batch.id, 0)
+        if not qty:
+            continue
+        medicine = medicines[batch.medicine_id]
+        db.add(InvoiceItem(invoice_id=invoice.id, batch_id=batch.id, medicine_name=medicine.name,
+                           unit_name=require(db, Unit, medicine.unit_id).name, quantity=qty,
+                           sale_price=batch.sale_price, purchase_price=batch.purchase_price))
         batch.quantity -= qty
         movement(db, batch, user, -qty, 'sale', invoice_id=invoice.id)
     db.commit()

@@ -2,7 +2,7 @@ from uuid import uuid4
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy import select, func
-from app.models import Batch, Invoice, Movement, Medicine, Procedure, AILog, User, InvoiceItem
+from app.models import Batch, Invoice, Movement, Medicine, User, InvoiceItem
 from app.config import today, settings
 from app import ai
 
@@ -163,22 +163,17 @@ def test_ai_refuses_clinical_and_injection_without_provider(setup,monkeypatch):
         r=c.post('/api/ai/ask',json={'mode':'procedure','question':question})
         assert r.status_code==200
         assert 'ngoài phạm vi' in r.json()['answer']
-    with S() as db: assert db.scalar(select(func.count(AILog.id)).where(AILog.status=='blocked'))==3
 
-def test_ai_internal_sources_without_approval_and_exact_extract(setup,monkeypatch):
+def test_procedure_mode_answers_without_saved_procedures(setup,monkeypatch):
     c,S,ids,_=setup
     monkeypatch.setattr(settings,'gemini_api_key','test-key')
-    with S() as db:
-        db.add_all([Procedure(title='Quy trình đúng',content='Đối chiếu lô và kiểm kê.',approved=True),Procedure(title='Không được dùng',content='Nội dung chưa duyệt.',approved=False)]);db.commit()
-    def choose(sources, request):
-        assert len(sources)==2 and sources[0]['title']=='Quy trình đúng'
-        return ai.Selection(source_ids=[sources[0]['id']],cannot_answer=False)
-    monkeypatch.setattr(ai,'select_sources',choose)
-    r=c.post('/api/ai/ask',json={'mode':'procedure','question':'Kiểm kê như thế nào?'})
+    monkeypatch.setattr(ai,'synthesize_chat',lambda request,user,results:('Các bước nhập lô theo nghiệp vụ.', 'fake-model'))
+    r=c.post('/api/ai/ask',json={'mode':'procedure','question':'Hướng dẫn nhập lô thuốc?'})
     assert r.status_code==200,r.text
-    assert 'Đối chiếu lô và kiểm kê.' in r.json()['answer']
-    assert r.json()['warning']==ai.WARNING
-    with S() as db: assert db.scalar(select(AILog)).status=='ok'
+    assert 'Các bước nhập lô' in r.json()['answer']
+    assert r.json()['sources']==[]
+    assert c.get('/api/procedures').status_code==404
+    assert c.post('/api/procedures',json={'title':'a','content':'b'}).status_code==404
 
 def test_ai_missing_key_is_clear_error(setup,monkeypatch):
     c,S,ids,_=setup
@@ -198,12 +193,12 @@ def test_ai_medicine_requires_provider_not_approval(setup,monkeypatch):
     c,S,ids,_=setup
     with S() as db: db.get(Medicine,ids['medicine']).approved=False;db.commit()
     monkeypatch.setattr(settings,'gemini_api_key','')
-    assert c.post('/api/ai/ask',json={'mode':'summary','medicine_id':ids['medicine']}).status_code==422
+    assert c.post('/api/ai/ask',json={'mode':'summary','medicine_id':ids['medicine']}).status_code==503
 
 def test_ai_no_data_without_key(setup):
     c,S,ids,_=setup
     r=c.post('/api/ai/ask',json={'mode':'procedure','question':'Nhập lô thế nào?'})
-    assert r.status_code==200 and r.json()['sources']==[]
+    assert r.status_code==503 and 'GEMINI_API_KEY' in r.json()['detail']
 
 def test_disabled_account_revokes_access(setup):
     c,S,ids,tokens=setup
@@ -278,7 +273,7 @@ def test_gemini_interactions_structured_response_wiring(setup,monkeypatch):
     assert len(r.json()['sources'])==1
 
 
-def test_gemini_provider_error_is_logged_and_sanitized(setup,monkeypatch):
+def test_gemini_provider_error_is_sanitized(setup,monkeypatch):
     c,S,ids,_=setup
     monkeypatch.setattr(settings,'gemini_api_key','not-a-real-key')
 
@@ -290,9 +285,5 @@ def test_gemini_provider_error_is_logged_and_sanitized(setup,monkeypatch):
     monkeypatch.setattr(ai.httpx,'post',lambda *args,**kwargs:FakeAuthFailure())
     r=c.post('/api/ai/ask',json={'mode':'summary','medicine_id':ids['medicine']})
     assert r.status_code==502
-    assert 'không hợp lệ' in r.json()['detail']
+    assert 'kết quả hợp lệ' in r.json()['detail']
     assert 'Never show' not in r.text
-    with S() as db:
-        log=db.scalar(select(AILog))
-        assert log.status=='error'
-        assert 'Never show' not in log.response

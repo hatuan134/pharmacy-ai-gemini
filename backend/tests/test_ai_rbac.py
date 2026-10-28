@@ -81,11 +81,14 @@ def test_dynamic_query_schema_blocks_cross_role_data(setup):
         with pytest.raises(ValueError):
             agent_query.run_query(db, 'SELECT purchase_price FROM batches', 'cashier')
 
-def test_non_manager_ai_requires_specific_invoice_id(setup):
+def test_all_roles_can_list_invoices_via_ai(setup):
     _, Session, _, _ = setup
     with Session() as db:
-        cashier = _user(db, 'cashier')
-        denied = ai._role_access_denied_reason('Cho tôi danh sách hóa đơn', cashier.role)
-        assert 'một hóa đơn cụ thể theo mã' in denied
-        data, _ = ai._tool_system_data(db, 'hóa đơn', cashier.role)
-        assert data == {}
+        for role in ('cashier', 'pharmacist'):
+            assert ai._role_access_denied_reason('Cho tôi danh sách hóa đơn', role) == ''
+            assert ai._role_access_denied_reason('Hóa đơn của nhân viên khác', role) == ''
+            data, _ = ai._tool_system_data(db, 'hóa đơn', role)
+            assert 'invoices' in data
+            assert 'invoice_items' in data
+            assert 'purchase_price' not in data['invoice_items']['rows'][0] if data['invoice_items']['rows'] else True
+            assert ai._role_access_denied_reason('Doanh thu tổng nhà thuốc', role)

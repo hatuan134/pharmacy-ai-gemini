@@ -69,12 +69,17 @@ it('password eyes toggle independently and never submit',()=>{
   fireEvent.click(screen.getByRole('button',{name:'Ẩn mật khẩu hiện tại'}));expect(old.type).toBe('password');
 });
 it('login has password eye',()=>{render(<Login onLogin={vi.fn()}/>);fireEvent.click(screen.getByRole('button',{name:'Hiện mật khẩu'}));expect(screen.getByLabelText('Mật khẩu').type).toBe('text')});
-it('medicine approval requires reviewing source and uses displayed revision',async()=>{
-  api.mockImplementation(path=>Promise.resolve(path==='/medicines'?[{...medicine,approved:false,approval_revision:'a'.repeat(64)}]:data[path]||[]));
-  send.mockResolvedValue({});render(<Catalog type="medicines" user={user}/>);
-  fireEvent.click(await screen.findByTitle('Kiểm tra nguồn AI'));await screen.findByRole('dialog');
-  fireEvent.click(screen.getByRole('button',{name:'Xác nhận đã duyệt cho AI'}));
-  await waitFor(()=>expect(send).toHaveBeenCalledWith('/medicines/1/approval','POST',{approved:true,revision:'a'.repeat(64)}));
+it('medicine editor has no manual AI approval action',async()=>{
+  render(<Catalog type="medicines" user={user}/>);
+  await screen.findByText('Thuốc kiểm thử A');
+  expect(screen.queryByTitle('Kiểm tra nguồn AI')).toBeNull();
+  expect(screen.queryByText('Chưa duyệt')).toBeNull();
+});
+it('pharmacist can view batches but cannot adjust stock or sale price',async()=>{
+  render(<Batches user={{...user,role:'pharmacist'}}/>);
+  await screen.findByText('LOT-001');
+  expect(screen.queryByRole('button',{name:'Kiểm kê'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Đổi giá'})).toBeNull();
 });
 it('chat has no history sidebar or persistence calls and resets session',async()=>{
   streamApi.mockImplementation(async(p,o,event)=>{event({type:'delta',text:'Câu trả lời phiên hiện tại'});event({type:'done',status:'ok'})});

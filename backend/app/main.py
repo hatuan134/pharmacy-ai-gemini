@@ -191,9 +191,6 @@ def catalog(path, model, schema, create_permission=staff, update_permission=staf
         validate(db, values, obj)
         for key, value in values.items():
             setattr(obj, key, value)
-        if model is Medicine and any(before.get(key) != value for key,value in values.items()):
-            obj.approved = False
-            obj.approved_by = None
         db.commit()
         return row(obj)
 
@@ -210,27 +207,11 @@ def catalog(path, model, schema, create_permission=staff, update_permission=staf
     app.add_api_route('/api/' + path + '/{ident}', delete, methods=['DELETE'], name=path + '_delete')
 
 
-# Manager owns system catalogs/suppliers/procedures. Pharmacist can curate medicines.
+# Manager controls business catalogs/pricing; pharmacists curate medicine information.
 catalog('categories', Category, NameIn, manager, manager, manager)
 catalog('units', Unit, NameIn, manager, manager, manager)
 catalog('suppliers', Supplier, SupplierIn, manager, manager, manager, staff)
 catalog('medicines', Medicine, MedicineIn, staff, staff, manager)
-catalog('procedures', Procedure, ProcedureIn, manager, manager, manager)
-
-
-@app.post('/api/medicines/{ident}/approval')
-def medicine_approval(ident: int, data: MedicineApproval, user=Depends(staff), db=Depends(get_db)):
-    from .services import approval_revision
-    item=db.scalar(select(Medicine).where(Medicine.id==ident).with_for_update())
-    if not item: raise HTTPException(404, 'Không tìm thấy thuốc.')
-    if data.revision != approval_revision(item):
-        raise HTTPException(409, 'Thông tin thuốc đã thay đổi. Tải lại, kiểm tra nội dung rồi xác nhận lại.')
-    if data.approved and not item.information.strip():
-        raise HTTPException(422, 'Hãy nhập thông tin thuốc trước khi duyệt cho AI.')
-    item.approved=data.approved
-    item.approved_by=user.id if data.approved else None
-    db.commit()
-    return row(item)
 
 
 # ---------------- Inventory / batches ----------------
@@ -254,6 +235,15 @@ def batch_create(data: BatchIn, user=Depends(staff), db=Depends(get_db)):
         raise HTTPException(422, 'Thuốc hoặc nhà cung cấp đã ngừng hoạt động.')
     if data.expiry_date <= today() or data.expiry_date <= data.received_date or data.received_date > today():
         raise HTTPException(422, 'Ngày nhập không được ở tương lai; hạn dùng phải sau ngày nhập và sau hôm nay.')
+    if user.role == 'pharmacist':
+        # Pharmacists enter lots, not price policies.  Reuse the most recently
+        # configured sale price for the medicine; the first lot needs a manager.
+        reference = db.scalar(select(Batch).where(Batch.medicine_id == data.medicine_id)
+                              .order_by(Batch.id.desc()).limit(1).with_for_update())
+        if reference is None:
+            raise HTTPException(403, 'Thuốc chưa có giá bán do Quản lý thiết lập. Hãy nhờ Quản lý nhập lô đầu tiên.')
+        if data.sale_price != reference.sale_price:
+            raise HTTPException(403, 'Dược sĩ không được tự thay đổi giá bán. Hãy dùng giá của lô gần nhất hoặc nhờ Quản lý cập nhật.')
     batch = Batch(**data.model_dump())
     db.add(batch)
     db.flush()
@@ -263,7 +253,7 @@ def batch_create(data: BatchIn, user=Depends(staff), db=Depends(get_db)):
 
 
 @app.patch('/api/batches/{ident}/price')
-def batch_price(ident: int, data: BatchPrice, user=Depends(staff), db=Depends(get_db)):
+def batch_price(ident: int, data: BatchPrice, user=Depends(manager), db=Depends(get_db)):
     batch = db.scalar(select(Batch).where(Batch.id == ident).with_for_update())
     if not batch:
         raise HTTPException(404, 'Không tìm thấy lô.')
@@ -275,7 +265,7 @@ def batch_price(ident: int, data: BatchPrice, user=Depends(staff), db=Depends(ge
 
 
 @app.post('/api/batches/{ident}/adjust')
-def adjust(ident: int, data: Adjustment, user=Depends(staff), db=Depends(get_db)):
+def adjust(ident: int, data: Adjustment, user=Depends(manager), db=Depends(get_db)):
     batch = db.scalar(select(Batch).where(Batch.id == ident).with_for_update())
     if not batch:
         raise HTTPException(404, 'Không tìm thấy lô.')
@@ -407,11 +397,6 @@ def chat_stream(data: AIChatRequest, user=Depends(ai_user), db=Depends(get_db)):
             'X-Accel-Buffering': 'no',
         },
     )
-
-
-@app.get('/api/ai/logs')
-def ai_logs(user=Depends(manager), db=Depends(get_db)):
-    return [row(x) for x in db.scalars(select(AILog).order_by(AILog.id.desc()).limit(200))]
 
 
 # ---------------- Production frontend ----------------
