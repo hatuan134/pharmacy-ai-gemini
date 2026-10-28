@@ -33,6 +33,8 @@ def documented_header(x_requested_with: str = Header(default='pharmacy')):
 app = FastAPI(title='An Tâm · Quản lý nhà thuốc', version='2.0.0', dependencies=[Depends(documented_header)])
 from .conversations import router as conversation_router
 app.include_router(conversation_router)
+from .chat_history import router as chat_history_router
+app.include_router(chat_history_router)
 
 origins = [x.strip() for x in settings.cors_origins.split(',')]
 app.add_middleware(

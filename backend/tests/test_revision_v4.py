@@ -30,7 +30,7 @@ def test_no_approval_block_in_agent(setup,monkeypatch):
         assert not result['terminal']
         assert any(x['tool']=='medicine_search' for x in result['results'])
 
-def test_session_chat_no_persistence_no_title_and_removed_history(setup,monkeypatch):
+def test_session_without_conversation_id_does_not_store_history(setup,monkeypatch):
     c,S,ids,_=setup
     from app.config import settings
     monkeypatch.setattr(settings,'gemini_api_key','')
@@ -41,7 +41,7 @@ def test_session_chat_no_persistence_no_title_and_removed_history(setup,monkeypa
     assert 'không khả dụng' in ''.join(x.get('text','') for x in events)
     with S() as db:
         for model in [AIMessage,AIConversation]:assert db.scalar(select(func.count()).select_from(model))==0
-    assert c.get('/api/ai/conversations').status_code==404
+    assert c.get('/api/ai/conversations').status_code==200
 
 
 def test_stop_is_owner_scoped_and_cleans_registry(setup,monkeypatch):

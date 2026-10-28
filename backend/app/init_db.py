@@ -1,13 +1,16 @@
 """Create initial schema and first manager; never reset existing data."""
 import os, getpass
-from sqlalchemy import select
+from sqlalchemy import select, update
 from .db import Base, engine, SessionLocal
-from .models import User
+from .models import User, AIConversation
 from .auth import hash_password
 
 def main():
     Base.metadata.create_all(engine)
     with SessionLocal() as db:
+        # Streaming jobs cannot survive a Render restart: clear stale busy flags.
+        db.execute(update(AIConversation).where(AIConversation.busy.is_(True)).values(busy=False))
+        db.commit()
         from .migrations import apply
         apply(db)
         if db.scalar(select(User.id).limit(1)):

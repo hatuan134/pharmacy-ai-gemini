@@ -109,6 +109,8 @@ class AIConversation(Base):
     __tablename__ = 'ai_conversations'
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    # Keep conversations created under different roles separate to avoid exposing previous privileges.
+    role_scope: Mapped[str | None] = mapped_column(String(20), nullable=True)
     title: Mapped[str] = mapped_column(String(100), default='Cuộc trò chuyện mới')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)

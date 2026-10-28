@@ -92,6 +92,7 @@ class ChatMessage(Input):
     content: str = Field(min_length=1, max_length=4000)
 
 class AIChatRequest(Input):
+    conversation_id: int | None = Field(default=None, ge=1)
     agent: bool = False
     message: str = Field(min_length=1, max_length=2000)
     history: list[ChatMessage] = Field(default_factory=list, max_length=12)

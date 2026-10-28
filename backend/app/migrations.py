@@ -1,6 +1,6 @@
 """Các migration dữ liệu nhỏ, chạy idempotent khi ứng dụng khởi động."""
 import re
-from sqlalchemy import select
+from sqlalchemy import select, inspect, text
 from .models import SchemaMigration, Supplier
 
 
@@ -24,6 +24,15 @@ def _collapse_repeated_name(value: str) -> str:
 
 def apply(db):
     insert = _insert_for(db)
+    # Non-destructive, repeatable migration; applies before conversation routes run.
+    # Existing conversations are tagged with their owner's current role (historic
+    # role changes before this migration cannot be reconstructed).
+    if 'ai_conversations' in inspect(db.get_bind()).get_table_names():
+        cols = {c['name'] for c in inspect(db.get_bind()).get_columns('ai_conversations')}
+        if 'role_scope' not in cols:
+            db.execute(text('ALTER TABLE ai_conversations ADD COLUMN role_scope VARCHAR(20)'))
+        db.execute(text("""UPDATE ai_conversations SET role_scope = (SELECT role FROM users WHERE users.id = ai_conversations.user_id) WHERE role_scope IS NULL"""))
+        db.commit()
 
     # Dọn dữ liệu nhà cung cấp đã nhập sai trước khi bổ sung validation số điện thoại.
     # Chỉ sửa các trường hợp rõ ràng: phone có chữ; tên bị lặp đúng 2 lần; địa chỉ trùng tên.

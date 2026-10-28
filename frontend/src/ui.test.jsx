@@ -2,7 +2,7 @@
 import React from 'react';
 import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest';
 import {render,screen,waitFor,cleanup,fireEvent} from '@testing-library/react';
-import {Login,Dashboard,Catalog,POS,Batches,Invoices,Alerts,Reports,AI,Staff,SettingsPage} from './main';
+import {Login,Dashboard,Catalog,POS,Batches,Invoices,Alerts,Reports,AI,App,Staff,SettingsPage} from './main';
 import {api,send,streamApi} from './api';
 vi.mock('./api',async()=>{const real=await vi.importActual('./api');return{...real,api:vi.fn(),send:vi.fn(),streamApi:vi.fn()}});
 const user={id:1,name:'Quản lý kiểm thử',role:'manager'};
@@ -10,8 +10,9 @@ const batch={id:1,medicine_id:1,medicine_name:'Thuốc kiểm thử A',medicine_
 const medicine={id:1,name:'Thuốc kiểm thử A',code:'T001',approved:true,active:true,min_stock:5,category_id:1,unit_id:1,information:'Thông tin',source:'Nguồn kiểm thử'};
 const report={role:'manager',revenue:'0',invoice_count:0,medicine_count:1,stock_value:'100000',series:[],staff_count:3,pending_approvals:0,alerts:{expiry:[batch],low_stock:[]}};
 const data={'/medicines':[medicine],'/categories':[{id:1,name:'Nhóm 1'}],'/units':[{id:1,name:'Hộp'}],'/suppliers':[{id:1,name:'NCC'}],'/batches':[batch],'/invoices':[], '/procedures':[], '/users':[user], '/reports':report, '/dashboard':report, '/alerts':report.alerts, '/approval-requests':[], '/audit-logs':[]};
-beforeEach(()=>{api.mockReset();send.mockReset();streamApi.mockReset();api.mockImplementation(path=>Promise.resolve(data[path.split('?')[0]]??[]));});
+beforeEach(()=>{window.localStorage.clear();api.mockReset();send.mockReset();send.mockResolvedValue({id:1,title:'Cuộc trò chuyện mới'});streamApi.mockReset();api.mockImplementation(path=>Promise.resolve(data[path.split('?')[0]]??[]));});
 afterEach(cleanup);
+function renderChat(){render(<AI user={user}/>);fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));}
 it('dashboard renders loaded values and navigation action',async()=>{const go=vi.fn();render(<Dashboard user={user} go={go}/>);await screen.findByText('Doanh thu tháng');fireEvent.click(screen.getByRole('button',{name:'Tạo đơn bán'}));expect(go).toHaveBeenCalledWith('pos')});
 it('medicine page loads, opens edit and sends only writable fields',async()=>{render(<Catalog type="medicines" user={user}/>);await screen.findByText('Thuốc kiểm thử A');fireEvent.click(screen.getByRole('button',{name:'Sửa'}));fireEvent.change(screen.getByLabelText('Tên thuốc'),{target:{value:'Tên mới'}});send.mockResolvedValue({});fireEvent.click(screen.getByRole('button',{name:'Lưu thông tin'}));await waitFor(()=>expect(send).toHaveBeenCalled());expect(send.mock.calls[0][2].name).toBe('Tên mới');expect(send.mock.calls[0][2]).not.toHaveProperty('approved');expect(send.mock.calls[0][2]).not.toHaveProperty('id')});
 it('POS adds a lot and submits captured price',async()=>{render(<POS user={user}/>);const product=await screen.findByRole('button',{name:/Thuốc kiểm thử A/});fireEvent.click(product);send.mockResolvedValue({id:1,customer:'Khách lẻ',total:'20000',items:[],status:'paid'});fireEvent.click(screen.getByRole('button',{name:'Xác nhận thanh toán'}));await screen.findByRole('dialog');expect(send.mock.calls[0][2].items).toEqual([{batch_id:1,quantity:1,expected_sale_price:'20000'}]);});
@@ -21,26 +22,26 @@ it('batch page renders quantity and opens adjustment',async()=>{render(<Batches 
 it('invoice page has usable empty state',async()=>{render(<Invoices user={user}/>);await screen.findByText('Không có dữ liệu')});
 it('alerts show expiring batch',async()=>{render(<Alerts/>);await screen.findByText('LOT-001');expect(screen.getByText('Còn 30 ngày')).toBeTruthy()});
 it('reports handle no revenue',async()=>{render(<Reports/>);await screen.findByText('Chưa có hóa đơn đã thanh toán trong khoảng thời gian này.')});
-it('AI chatbot shows provider error and stays usable',async()=>{render(<AI user={user}/>);const box=screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…');fireEvent.change(box,{target:{value:'Kiểm kê như thế nào?'}});streamApi.mockRejectedValue(new Error('Chưa cấu hình GEMINI_API_KEY'));fireEvent.click(screen.getByRole('button',{name:'Gửi'}));await screen.findByRole('alert');expect(screen.getByText('Chưa cấu hình GEMINI_API_KEY')).toBeTruthy();expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(true)});
-it('AI chatbot renders answer as text, not injected HTML',async()=>{render(<AI user={user}/>);const box=screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…');fireEvent.change(box,{target:{value:'Kiểm kê?'}});send.mockResolvedValue({id:1});streamApi.mockImplementation(async(path,options,event)=>{event({type:'message',id:2});event({type:'delta',text:'<script>alert(1)</script>'});event({type:'done',status:'ok'})});fireEvent.click(screen.getByRole('button',{name:'Gửi'}));await screen.findByText('<script>alert(1)</script>');expect(document.querySelector('script')).toBeNull()});
+it('AI chatbot shows provider error and stays usable',async()=>{renderChat();const box=screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…');fireEvent.change(box,{target:{value:'Kiểm kê như thế nào?'}});streamApi.mockRejectedValue(new Error('Chưa cấu hình GEMINI_API_KEY'));await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));fireEvent.click(screen.getByRole('button',{name:'Gửi'}));await screen.findByRole('alert');expect(screen.getByText('Chưa cấu hình GEMINI_API_KEY')).toBeTruthy();expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(true)});
+it('AI chatbot renders answer as text, not injected HTML',async()=>{renderChat();const box=screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…');fireEvent.change(box,{target:{value:'Kiểm kê?'}});send.mockResolvedValue({id:1,title:'Cuộc trò chuyện mới'});streamApi.mockImplementation(async(path,options,event)=>{event({type:'message',id:2});event({type:'delta',text:'<script>alert(1)</script>'});event({type:'done',status:'ok'})});await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));fireEvent.click(screen.getByRole('button',{name:'Gửi'}));await screen.findByText('<script>alert(1)</script>');expect(document.querySelector('script')).toBeNull()});
 it('staff list and settings render',async()=>{const view=render(<Staff/>);await screen.findByText('Quản lý kiểm thử');view.unmount();render(<SettingsPage user={user}/>);expect(screen.getByLabelText('Mật khẩu hiện tại')).toBeTruthy()});
 it('failed data loading offers retry instead of a blank page',async()=>{api.mockRejectedValueOnce(new Error('Mất kết nối máy chủ'));render(<Catalog type="suppliers" user={user}/>);await screen.findByRole('alert');fireEvent.click(screen.getByRole('button',{name:'Thử lại'}));await screen.findByText('NCC')});
 
 it('AI stops active generation using AbortSignal',async()=>{
-  send.mockResolvedValue({id:1});
+  send.mockResolvedValue({id:1,title:'Cuộc trò chuyện mới'});
   streamApi.mockImplementation((path,options,event)=>new Promise((resolve,reject)=>{event({type:'message',id:2});options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')))}));
-  render(<AI user={user}/>);
+  renderChat();
   fireEvent.change(screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…'),{target:{value:'Tồn kho?'}});
-  fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
   await waitFor(()=>expect(streamApi).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('button',{name:'Dừng trả lời'}));
   await screen.findByText('Đã dừng trả lời.');
   expect(send).toHaveBeenCalledWith(expect.stringMatching(/^\/ai\/session\/.+\/stop$/),'POST',{});
 });
 it('AI renders a Markdown table safely',async()=>{
-  send.mockResolvedValue({id:1});
+  send.mockResolvedValue({id:1,title:'Cuộc trò chuyện mới'});
   streamApi.mockImplementation(async(path,options,event)=>{event({type:'message',id:2});event({type:'delta',text:'| Thuốc | Tồn |\n| --- | --- |\n| **Para** | 150 |'});event({type:'done',status:'ok'})});
-  render(<AI user={user}/>);fireEvent.change(screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…'),{target:{value:'Tồn?'}});fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
+  renderChat();fireEvent.change(screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…'),{target:{value:'Tồn?'}});await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
   await screen.findByRole('table');expect(screen.getByRole('cell',{name:'150'})).toBeTruthy();
 });
 
@@ -51,11 +52,11 @@ it('AI header omits chat persistence note and hides stray asterisks',async()=>{
     event({type:'delta',text:'Quy trình\n* Bước một\nNội dung bị dư dấu*'});
     event({type:'done',status:'ok'});
   });
-  render(<AI user={user}/>);
-  expect(screen.getByText('Tra cứu nội bộ')).toBeTruthy();
+  renderChat();
+  expect(screen.getByText(/Trợ lý nhà thuốc/)).toBeTruthy();
   expect(screen.queryByText(/Nội dung chat không được lưu lại/)).toBeNull();
   fireEvent.change(screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…'),{target:{value:'Quy trình?'}});
-  fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
   await screen.findByText('Bước một');
   expect(screen.getByText('Nội dung bị dư dấu').textContent).not.toContain('*');
 });
@@ -81,10 +82,100 @@ it('pharmacist can view batches but cannot adjust stock or sale price',async()=>
   expect(screen.queryByRole('button',{name:'Kiểm kê'})).toBeNull();
   expect(screen.queryByRole('button',{name:'Đổi giá'})).toBeNull();
 });
-it('chat has no history sidebar or persistence calls and resets session',async()=>{
-  streamApi.mockImplementation(async(p,o,event)=>{event({type:'delta',text:'Câu trả lời phiên hiện tại'});event({type:'done',status:'ok'})});
-  render(<AI user={user}/>);expect(screen.queryByText('Hôm nay')).toBeNull();
-  fireEvent.change(screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…'),{target:{value:'Tra cứu'}});fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
-  await screen.findByText('Câu trả lời phiên hiện tại');fireEvent.click(screen.getByRole('button',{name:'Làm mới'}));
-  expect(screen.queryByText('Câu trả lời phiên hiện tại')).toBeNull();expect(send).not.toHaveBeenCalled();
+it('chat shows persistent conversation history and creates new sessions',async()=>{
+  api.mockImplementation(path=>Promise.resolve(path==='/ai/conversations'?[{id:3,title:'Tra cứu tồn kho',updated_at:'2026-10-28T11:00:00Z'}]:path==='/ai/conversations/3'?{id:3,messages:[{id:21,role:'user',content:'Tồn bao nhiêu?'},{id:22,role:'assistant',content:'Còn 10 hộp',status:'complete'}]}:data[path.split('?')[0]]??[]));
+  send.mockResolvedValue({id:4,title:'Cuộc trò chuyện mới'});
+  renderChat();
+  fireEvent.click(screen.getByRole('button',{name:'Lịch sử trò chuyện'}));
+  await screen.findByText('Tra cứu tồn kho');
+  expect(await screen.findByText('Còn 10 hộp')).toBeTruthy();
+  fireEvent.click(screen.getAllByRole('button',{name:'Cuộc trò chuyện mới'})[0]);
+  await waitFor(()=>expect(send).toHaveBeenCalledWith('/ai/conversations','POST',{}));
+  expect(screen.queryByText('Còn 10 hộp')).toBeNull();
+});
+
+
+it('AI is only a floating assistant: expand does not navigate to another page',async()=>{
+  renderChat();
+  expect(screen.queryByRole('button',{name:'Mở trang AI'})).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Phóng to cửa sổ'}));
+  expect(screen.getByRole('dialog',{name:'Trợ lý An Tâm AI'})).toBeTruthy();
+  expect(screen.getByRole('button',{name:'Thu nhỏ cửa sổ'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Thu nhỏ cửa sổ'}));
+  expect(screen.getByRole('region',{name:'Trợ lý An Tâm AI'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Đóng chatbot'}));
+  expect(screen.getByRole('button',{name:/Mở An Tâm AI/})).toBeTruthy();
+});
+
+it('AI floating launcher can collapse and move using arrow keys',()=>{
+  render(<AI user={user}/>);
+  const launcher=screen.getByRole('button',{name:/Mở An Tâm AI/});
+  const floating=launcher.closest('.assistant-launcher-wrap');
+  const previous=parseInt(floating.style.bottom,10);
+  fireEvent.keyDown(launcher,{key:'ArrowUp'});
+  expect(parseInt(floating.style.bottom,10)).toBeGreaterThan(previous);
+  fireEvent.click(screen.getByRole('button',{name:'Thu gọn nút AI vào mép phải'}));
+  expect(floating.className).toContain('is-compact');
+  fireEvent.click(screen.getByRole('button',{name:'Mở rộng nút AI'}));
+  expect(floating.className).not.toContain('is-compact');
+});
+
+it('sidebar has no dedicated AI route or navigation item',async()=>{
+  api.mockImplementation(path=>Promise.resolve(path==='/auth/me'?user:data[path.split('?')[0]]??[]));
+  render(<App/>);
+  await screen.findByText('Trung tâm điều hành');
+  expect(screen.queryByRole('navigation',{name:'An Tâm AI'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'An Tâm AI'})).toBeNull();
+  expect(screen.getByRole('button',{name:/Mở An Tâm AI/})).toBeTruthy();
+});
+
+it('catalog shows 10 aligned rows per page and resets when searching',async()=>{
+  const many=Array.from({length:24},(_,i)=>({...medicine,id:i+1,code:`T${i+1}`,name:`Thuốc số ${String(i+1).padStart(2,'0')}`}));
+  api.mockImplementation(path=>Promise.resolve(path==='/medicines'?many:data[path.split('?')[0]]??[]));
+  render(<Catalog type="medicines" user={user}/>);
+  await screen.findByText('Thuốc số 01');
+  const table=screen.getByRole('table');
+  expect(table.querySelector('colgroup').children.length).toBe(table.querySelectorAll('thead th').length);
+  expect(table.querySelectorAll('tbody tr').length).toBe(10);
+  expect(screen.getByText('Hiển thị 1–10 / 24 dòng')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Trang 2'}));
+  expect(screen.getByText('Thuốc số 11')).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('Tìm kiếm danh mục'),{target:{value:'Thuốc số 24'}});
+  expect(screen.getByText('Thuốc số 24')).toBeTruthy();
+  expect(screen.queryByText('Thuốc số 11')).toBeNull();
+});
+
+it('POS shows at most 6 distinct medicines per page and uses earliest lot',async()=>{
+  const lots=Array.from({length:14},(_,i)=>({...batch,id:i+1,medicine_id:i+1,medicine_code:`M${i+1}`,medicine_name:`Thuốc POS ${String(i+1).padStart(2,'0')}`,code:`LOT-${i+1}`}));
+  // A later batch for medicine 1 must not replace the earlier FEFO representative card.
+  lots.push({...batch,id:90,medicine_id:1,medicine_name:'Thuốc POS 01',code:'LOT-LATER',expiry_date:'2028-01-01'});
+  api.mockImplementation(path=>Promise.resolve(path.startsWith('/batches')?lots:data[path.split('?')[0]]??[]));
+  render(<POS user={user}/>);
+  await screen.findByText('Thuốc POS 01');
+  expect(document.querySelectorAll('.product-grid .product').length).toBe(6);
+  expect(screen.queryByText('LOT-LATER')).toBeNull();
+  expect(screen.getByText('Hiển thị 1–6 / 14 thuốc')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Trang 2'}));
+  expect(screen.getByText('Thuốc POS 07')).toBeTruthy();
+  fireEvent.change(screen.getByPlaceholderText('Tìm tên thuốc, mã thuốc hoặc số lô…'),{target:{value:'Thuốc POS 14'}});
+  expect(screen.getByText('Thuốc POS 14')).toBeTruthy();
+  expect(screen.queryByText('Thuốc POS 07')).toBeNull();
+});
+
+it('floating AI launcher label is An Tâm AI without Hỏi',()=>{
+  render(<AI user={user}/>);
+  const btn=screen.getByRole('button',{name:/Mở An Tâm AI/});
+  expect(btn.textContent).toContain('An Tâm AI');
+  expect(btn.textContent).not.toContain('Hỏi');
+});
+
+it('reports paginate long daily revenue series in groups of ten',async()=>{
+  const series=Array.from({length:24},(_,i)=>({date:`2026-10-${String(i+1).padStart(2,'0')}`,revenue:String(100+i)}));
+  api.mockImplementation(path=>Promise.resolve(path.startsWith('/reports')?{...report,series}:data[path.split('?')[0]]??[]));
+  render(<Reports/>);
+  await screen.findByText('Doanh thu theo ngày');
+  await screen.findByText('Hiển thị 1–10 / 24 ngày');
+  expect(document.querySelectorAll('.bar-row').length).toBe(10);
+  fireEvent.click(screen.getByRole('button',{name:'Trang 3'}));
+  expect(document.querySelectorAll('.bar-row').length).toBe(4);
 });
