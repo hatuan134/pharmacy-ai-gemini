@@ -10,6 +10,48 @@ const Mark=({text})=><div>{text}</div>;
 beforeEach(()=>{api.mockReset().mockResolvedValue([]);send.mockReset().mockResolvedValue({id:1,title:'Cuộc trò chuyện mới'});streamApi.mockReset()});
 afterEach(cleanup);
 
+it('restores saved content, cards, table and actions after close/open and remount',async()=>{
+  const c={id:7,title:'Kho',updated_at:'2026-10-28T08:00:00Z'};
+  api.mockImplementation(async(path)=>path==='/ai/conversations'?[c]:{id:7,messages:[{
+    id:99,role:'assistant',content:'Nội dung đã lưu',status:'complete',presentation:{
+      cards:[{label:'Tổng tồn đã lưu',value:10}],
+      table:{title:'Bảng đã lưu',columns:[{key:'name',label:'Thuốc'}],rows:[{name:'Mặt hàng đã lưu'}]},
+      actions:[{page:'batches',label:'Mở kho đã lưu'}]}}]});
+  const props={user:manager,MarkdownMessage:Mark,page:'batches'};
+  let view=render(<AIChat {...props}/>);
+  fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
+  await screen.findByText('Nội dung đã lưu');
+  fireEvent.click(screen.getByRole('button',{name:'Đóng chatbot'}));
+  fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
+  expect(screen.getByText('Nội dung đã lưu')).toBeTruthy();
+  view.unmount();
+  view=render(<AIChat {...props}/>);
+  fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
+  await screen.findByText('Nội dung đã lưu');
+  expect(screen.getByText('Tổng tồn đã lưu')).toBeTruthy();
+  expect(screen.getByText('Mặt hàng đã lưu')).toBeTruthy();
+  expect(screen.getByText('Bảng đã lưu').closest('details').open).toBe(false);
+  expect(screen.getByRole('button',{name:'Mở kho đã lưu'})).toBeTruthy();
+  expect(screen.queryByText('Phản hồi chưa hoàn tất.')).toBeNull();
+});
+
+it('does not mark a completed answer interrupted when the history list fails',async()=>{
+  api.mockResolvedValueOnce([]).mockRejectedValue(new Error('network'));
+  streamApi.mockImplementation(async(_url,_options,packet)=>{
+    packet({type:'delta',text:'Câu trả lời hoàn tất'});
+    packet({type:'done',status:'ok'});
+  });
+  render(<AIChat user={manager} MarkdownMessage={Mark} page='dashboard'/>);
+  fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
+  fireEvent.change(screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…'),{target:{value:'Kiểm tra'}});
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
+  await screen.findByText('Câu trả lời hoàn tất');
+  await screen.findByRole('alert');
+  expect(screen.queryByText('Phản hồi chưa hoàn tất.')).toBeNull();
+});
+
 it('shows page-specific suggestions',async()=>{
   render(<AIChat user={manager} MarkdownMessage={Mark} page="batches"/>);
   fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
@@ -29,6 +71,7 @@ it('renders trusted cards and an in-app navigation action without technical badg
   render(<AIChat user={manager} MarkdownMessage={Mark} page="dashboard" onNavigate={navigate}/>);
   fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
   fireEvent.change(screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…'),{target:{value:'Doanh thu?' }});
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));
   await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
   expect(await screen.findByText('Doanh thu đã thanh toán')).toBeTruthy();
@@ -51,6 +94,7 @@ it('never offers a management report link to a cashier',async()=>{
   fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
   fireEvent.change(screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…'),{target:{value:'Doanh thu tháng này?'}});
   await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
   await screen.findByText('Bạn không có quyền xem doanh thu toàn hệ thống.');
   expect(screen.queryByRole('button',{name:'Mở báo cáo doanh thu'})).toBeNull();
@@ -69,6 +113,7 @@ it('does not display chart or copy/regenerate actions in streamed answers', asyn
   render(<AIChat user={manager} MarkdownMessage={Mark} page='batches' onNavigate={vi.fn()}/>);
   fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
   fireEvent.change(screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…'),{target:{value:'Tồn kho Thuốc A?' }});
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button',{name:'Gửi'}));
   expect(await screen.findByText('Thuốc A hiện có 9 đơn vị.')).toBeTruthy();
   expect(screen.queryByText('Tồn khả dụng một số thuốc')).toBeNull();

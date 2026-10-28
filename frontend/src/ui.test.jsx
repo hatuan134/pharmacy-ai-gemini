@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest';
-import {render,screen,waitFor,cleanup,fireEvent} from '@testing-library/react';
+import {render,screen,waitFor,cleanup,fireEvent,within} from '@testing-library/react';
 import {Login,Dashboard,Catalog,POS,Batches,Invoices,Alerts,Reports,AI,App,Staff,SettingsPage} from './main';
-import {api,send,streamApi} from './api';
+import {api,send,streamApi,localToday,money,date} from './api';
 vi.mock('./api',async()=>{const real=await vi.importActual('./api');return{...real,api:vi.fn(),send:vi.fn(),streamApi:vi.fn()}});
 const user={id:1,name:'Quản lý kiểm thử',role:'manager'};
 const batch={id:1,medicine_id:1,medicine_name:'Thuốc kiểm thử A',medicine_code:'T001',code:'LOT-001',quantity:10,unit:'Hộp',days_left:30,expiry_date:'2027-01-01',sale_price:'20000',purchase_price:'10000',supplier_name:'NCC',prescription_required:false};
@@ -21,7 +21,7 @@ it('cashier cannot select prescription product',async()=>{api.mockResolvedValue(
 it('batch page renders quantity and opens adjustment',async()=>{render(<Batches user={user}/>);await screen.findByText('LOT-001');fireEvent.click(screen.getByRole('button',{name:'Kiểm kê'}));expect(screen.getByLabelText('Số lượng thực tế').value).toBe('10')});
 it('invoice page has usable empty state',async()=>{render(<Invoices user={user}/>);await screen.findByText('Không có dữ liệu')});
 it('alerts show expiring batch',async()=>{render(<Alerts/>);await screen.findByText('LOT-001');expect(screen.getByText('Còn 30 ngày')).toBeTruthy()});
-it('reports handle no revenue',async()=>{render(<Reports/>);await screen.findByText('Chưa có hóa đơn đã thanh toán trong khoảng thời gian này.')});
+it('reports handle no revenue',async()=>{render(<Reports/>);await screen.findByText('Chưa có doanh thu trong khoảng thời gian này');expect(screen.queryByRole('img',{name:/Biểu đồ đường/})).toBeNull()});
 it('AI chatbot shows provider error and stays usable',async()=>{renderChat();const box=screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…');fireEvent.change(box,{target:{value:'Kiểm kê như thế nào?'}});streamApi.mockRejectedValue(new Error('Chưa cấu hình GEMINI_API_KEY'));await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));fireEvent.click(screen.getByRole('button',{name:'Gửi'}));await screen.findByRole('alert');expect(screen.getByText('Chưa cấu hình GEMINI_API_KEY')).toBeTruthy();expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(true)});
 it('AI chatbot renders answer as text, not injected HTML',async()=>{renderChat();const box=screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…');fireEvent.change(box,{target:{value:'Kiểm kê?'}});send.mockResolvedValue({id:1,title:'Cuộc trò chuyện mới'});streamApi.mockImplementation(async(path,options,event)=>{event({type:'message',id:2});event({type:'delta',text:'<script>alert(1)</script>'});event({type:'done',status:'ok'})});await waitFor(()=>expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(false));fireEvent.click(screen.getByRole('button',{name:'Gửi'}));await screen.findByText('<script>alert(1)</script>');expect(document.querySelector('script')).toBeNull()});
 it('staff list and settings render',async()=>{const view=render(<Staff/>);await screen.findByText('Quản lý kiểm thử');view.unmount();render(<SettingsPage user={user}/>);expect(screen.getByLabelText('Mật khẩu hiện tại')).toBeTruthy()});
@@ -169,13 +169,42 @@ it('floating AI launcher label is An Tâm AI without Hỏi',()=>{
   expect(btn.textContent).not.toContain('Hỏi');
 });
 
-it('reports paginate long daily revenue series in groups of ten',async()=>{
-  const series=Array.from({length:24},(_,i)=>({date:`2026-10-${String(i+1).padStart(2,'0')}`,revenue:String(100+i)}));
+it('reports show daily trend with real revenue and zero for days without sales',async()=>{
+  const end=localToday();
+  const day=i=>new Date(Date.parse(end+'T00:00:00Z')-i*86400000).toISOString().slice(0,10);
+  const series=Array.from({length:24},(_,i)=>({date:day(i),revenue:String(100+i)}));
   api.mockImplementation(path=>Promise.resolve(path.startsWith('/reports')?{...report,series}:data[path.split('?')[0]]??[]));
   render(<Reports/>);
-  await screen.findByText('Doanh thu theo ngày');
-  await screen.findByText('Hiển thị 1–10 / 24 ngày');
-  expect(document.querySelectorAll('.bar-row').length).toBe(10);
-  fireEvent.click(screen.getByRole('button',{name:'Trang 3'}));
-  expect(document.querySelectorAll('.bar-row').length).toBe(4);
+  const chart=await screen.findByRole('img',{name:/Biểu đồ đường thể hiện doanh thu/});
+  expect(screen.getByText('24 ngày có doanh thu')).toBeTruthy();
+  const points=within(chart).getAllByRole('img');
+  expect(points).toHaveLength(30);
+  expect(within(chart).getByRole('img',{name:`${date(day(0))}: ${money(100)}`})).toBeTruthy();
+  const zero=within(chart).getByRole('img',{name:`${date(day(29))}: ${money(0)}`});
+  fireEvent.focus(zero);
+  expect(document.querySelector('.report-trend-caption [aria-live]').textContent).toBe(`${date(day(29))}: ${money(0)}`);
+  expect(screen.queryByRole('button',{name:'Trang 3'})).toBeNull();
+});
+
+it('settings show both catalogs and keep edits scoped to the selected catalog',async()=>{
+  render(<SettingsPage user={user}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Danh mục'}));
+  const categories=screen.getByRole('region',{name:'Nhóm thuốc'});
+  const units=screen.getByRole('region',{name:'Đơn vị tính'});
+  await within(categories).findByText('Nhóm 1');
+  await within(units).findByText('Hộp');
+  fireEvent.change(within(categories).getByRole('textbox'),{target:{value:'không trùng'}});
+  expect(within(categories).queryByText('Nhóm 1')).toBeNull();
+  expect(within(units).getByText('Hộp')).toBeTruthy();
+  fireEvent.click(within(units).getByRole('button',{name:'Sửa'}));
+  const dialog=screen.getByRole('dialog');
+  fireEvent.change(within(dialog).getByRole('textbox'),{target:{value:'Viên'}});
+  fireEvent.click(within(dialog).getByRole('button',{name:'Lưu thông tin'}));
+  await waitFor(()=>expect(send).toHaveBeenCalledWith('/units/1','PUT',{name:'Viên'}));
+});
+
+it('non-managers cannot access catalog settings',()=>{
+  render(<SettingsPage user={{...user,role:'pharmacist'}}/>);
+  expect(screen.queryByRole('button',{name:'Danh mục'})).toBeNull();
+  expect(screen.getByLabelText('Mật khẩu hiện tại')).toBeTruthy();
 });

@@ -1,11 +1,13 @@
 """Gemini streaming, cancellation, and persistent account-scoped chat history."""
 import json
+import logging
 from datetime import datetime, timezone
 from threading import Event, Lock
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, update
+from sqlalchemy.orm import Session
 from .auth import ai_user
 from .db import get_db
 from .models import AIConversation, AIMessage
@@ -76,18 +78,41 @@ def stream(request_id: UUID, data: AIChatRequest, user=Depends(ai_user), db=Depe
     data.agent = True
     data._cancelled = event.is_set
 
+    # FastAPI 0.115 closes yield dependencies before consuming StreamingResponse.
+    # Capture identities now; the iterator owns its session and writes by primary key.
+    bind = db.get_bind()
+    assistant_id = assistant.id if assistant is not None else None
+
     def packets():
+        stream_db = Session(bind=bind, expire_on_commit=False)
         gen = None
         content = []
         metadata = {'sources': [], 'tools': [], 'route': 'direct', 'model': '', 'presentation': None}
         status = 'interrupted'
+        finalized = False
+        def persist(final=False):
+            nonlocal finalized
+            if assistant_id is None:
+                return
+            stream_db.execute(update(AIMessage).where(AIMessage.id == assistant_id).values(
+                content=''.join(content), status=status,
+                metadata_json=json.dumps(metadata, ensure_ascii=False, default=str)))
+            values = {'updated_at': datetime.now(timezone.utc)}
+            if final:
+                values['busy'] = False
+            stream_db.execute(update(AIConversation).where(
+                AIConversation.id == conversation_id).values(**values))
+            stream_db.commit()
+            finalized = final
+
         try:
-            if assistant:
-                yield json.dumps({'type':'message', 'id':assistant.id}) + '\n'
-            gen = ai.chat_stream(db, data, user)
+            if assistant_id is not None:
+                yield json.dumps({'type':'message', 'id':assistant_id}) + '\n'
+            gen = ai.chat_stream(stream_db, data, user)
             for raw in gen:
                 if event.is_set():
                     status = 'stopped'
+                    persist(final=True)
                     yield json.dumps({'type':'done', 'status':'stopped'}) + '\n'
                     break
                 try:
@@ -107,30 +132,36 @@ def stream(request_id: UUID, data: AIChatRequest, user=Depends(ai_user), db=Depe
                     metadata['model'] = packet.get('model') or metadata['model']
                 elif packet.get('type') == 'error':
                     status = 'interrupted'
+                # Persist before delivery, including structured results and terminal status.
+                # A dropped connection must not erase content already shown to the user.
+                if packet.get('type') in ('delta', 'meta', 'model', 'done', 'error'):
+                    persist(final=packet.get('type') == 'done')
                 yield raw
+                if packet.get('type') == 'done':
+                    break
         except GeneratorExit:
             raise
         except Exception:
             status = 'interrupted'
             yield json.dumps({'type':'error','text':'Phản hồi bị gián đoạn. Bạn có thể thử lại.'},ensure_ascii=False) + '\n'
         finally:
-            if gen:
-                gen.close()
             try:
-                if assistant:
-                    assistant.content = ''.join(content)[:20000]
-                    assistant.status = status
-                    assistant.metadata_json = json.dumps(metadata, ensure_ascii=False, default=str)
-                    conversation = owner_conversation(db, conversation_id, user.id, user.role)
-                    conversation.busy = False
-                    conversation.updated_at = datetime.now(timezone.utc)
-                    db.commit()
-            except Exception:
-                db.rollback()
+                if gen:
+                    gen.close()
             finally:
-                db.close()
-                with _lock:
-                    _running.pop(key, None)
+                try:
+                    if event.is_set() and status != 'complete':
+                        status = 'stopped'
+                    stream_db.rollback()
+                    if not finalized:
+                        persist(final=True)
+                except Exception:
+                    stream_db.rollback()
+                    logging.getLogger(__name__).exception('Could not persist AI response %s', assistant_id)
+                finally:
+                    stream_db.close()
+                    with _lock:
+                        _running.pop(key, None)
 
     return StreamingResponse(packets(), media_type='application/x-ndjson', headers={
         'X-Accel-Buffering':'no', 'Cache-Control':'no-store'

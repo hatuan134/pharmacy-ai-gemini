@@ -34,7 +34,7 @@ function VerifiedPresentation({value,role,onNavigate}){
   if(!cards.length&&!table&&!actions.length)return null;
   return <div className="verified-results">
     {cards.length>0&&<div className="verified-cards">{cards.map((c,i)=><div className="verified-card" key={i}><span>{c.label}</span><strong>{c.format==='currency'?fmtNum(c.value)+' ₫':fmtNum(c.value)}</strong></div>)}</div>}
-    {table&&Array.isArray(table.columns)&&Array.isArray(table.rows)&&table.rows.length>0&&<details className="verified-table" open={cards.length===0}><summary><Table2 size={16}/>{table.title||'Xem dữ liệu chi tiết'}<span>{table.rows.length} dòng</span></summary><div className="verified-table-scroll"><table><thead><tr>{table.columns.map(c=><th key={c.key}>{c.label}</th>)}</tr></thead><tbody>{table.rows.map((r,i)=><tr key={i}>{table.columns.map(c=><td key={c.key}>{String(r?.[c.key]??'—')}</td>)}</tr>)}</tbody></table></div>{table.has_more&&<p className="verified-more">Chỉ hiển thị một phần danh sách. Mở mục tương ứng để xem đầy đủ.</p>}</details>}
+    {table&&Array.isArray(table.columns)&&Array.isArray(table.rows)&&table.rows.length>0&&<details className="verified-table"><summary><Table2 size={16}/>{table.title||'Xem dữ liệu chi tiết'}<span>{table.rows.length} dòng</span></summary><div className="verified-table-scroll"><table><thead><tr>{table.columns.map(c=><th key={c.key}>{c.label}</th>)}</tr></thead><tbody>{table.rows.map((r,i)=><tr key={i}>{table.columns.map(c=><td key={c.key}>{String(r?.[c.key]??'—')}</td>)}</tr>)}</tbody></table></div>{table.has_more&&<p className="verified-more">Chỉ hiển thị một phần danh sách. Mở mục tương ứng để xem đầy đủ.</p>}</details>}
     {actions.length>0&&<nav className="verified-actions" aria-label="Đi đến chức năng liên quan">{actions.map(a=><button type="button" key={a.page} onClick={()=>onNavigate?.(a.page)}><ExternalLink size={15}/>{a.label}</button>)}</nav>}
   </div>;
 }
@@ -47,6 +47,7 @@ export default function AIChat({user,MarkdownMessage,page,onNavigate}){
   const [launcherCompact,setLauncherCompact]=useState(()=>{try{return window.localStorage.getItem('antam-ai-compact')==='true'}catch{return false}});
   const [launcherBottom,setLauncherBottom]=useState(()=>{try{const saved=Number(window.localStorage.getItem('antam-ai-bottom'));return Number.isFinite(saved)&&saved>=12?Math.min(saved,Math.max(12,window.innerHeight-80)):24}catch{return 24}});
   const drag=useRef(null);
+  const [dragging,setDragging]=useState(false);
   const launcherBottomRef=useRef(launcherBottom);
   launcherBottomRef.current=launcherBottom;
   const [conversations,setConversations]=useState([]),[conversationId,setConversationId]=useState(null),[messages,setMessages]=useState([]);
@@ -84,9 +85,9 @@ export default function AIChat({user,MarkdownMessage,page,onNavigate}){
   }
   function moveDrag(e){const state=drag.current;if(!state||state.pointerId!==e.pointerId)return;
     if(Math.abs(e.clientY-state.startY)>5)state.moved=true;
-    if(state.moved){const next=state.startBottom+state.startY-e.clientY;setLauncherBottom(Math.max(12,Math.min(next,Math.max(12,window.innerHeight-75))));}
+    if(state.moved){setDragging(true);const next=state.startBottom+state.startY-e.clientY;setLauncherBottom(Math.max(12,Math.min(next,Math.max(12,window.innerHeight-75))));}
   }
-  function stopDrag(e){if(drag.current?.pointerId===e.pointerId){
+  function stopDrag(e){setDragging(false);if(drag.current?.pointerId===e.pointerId){
     // Keep the movement flag until the click event has been ignored.
     if(!drag.current.moved||e.type==='pointercancel')drag.current=null;
     e.target.closest('.assistant-launcher')?.releasePointerCapture?.(e.pointerId);
@@ -139,10 +140,10 @@ export default function AIChat({user,MarkdownMessage,page,onNavigate}){
         if(packet.type==='model')update(m=>({...m,model:packet.model}));
         if(packet.type==='delta'){setActivity('');update(m=>({...m,content:m.content+packet.text}))}
         if(packet.type==='error'){setError(packet.text);update(m=>({...m,status:'interrupted'}))}
-        if(packet.type==='done')update(m=>({...m,streaming:false,status:packet.status==='stopped'?'stopped':'complete',model:packet.model||m.model}));
+        if(packet.type==='done')update(m=>({...m,streaming:false,status:packet.status==='stopped'?'stopped':packet.status==='interrupted'?'interrupted':'complete',model:packet.model||m.model}));
       });
-      await loadList();
-    }catch(err){if(err.name!=='AbortError')setError(err.message);mutateMessages(old=>old.map(m=>(m.id===temp||m.clientId===temp)?{...m,streaming:false,status:err.name==='AbortError'?'stopped':'interrupted'}:m))}
+      try{await loadList()}catch(e){setError('Không tải được danh sách lịch sử: '+e.message)}
+    }catch(err){if(err.name!=='AbortError')setError(err.message);mutateMessages(old=>old.map(m=>(m.id===temp||m.clientId===temp)?{...m,streaming:false,status:m.status==='complete'?'complete':err.name==='AbortError'?'stopped':'interrupted'}:m))}
     finally{active.current=null;controller.current=null;lock.current=false;if(mounted.current){mutateMessages(old=>old.map(m=>(m.id===temp||m.clientId===temp)&&m.streaming?{...m,streaming:false,status:m.status||'interrupted'}:m));setBusy(false);setActivity('')}}
   }
   async function stop(){const id=active.current;if(id)try{await send(`/ai/session/${id}/stop`,'POST',{})}catch{}controller.current?.abort()}
@@ -150,7 +151,7 @@ export default function AIChat({user,MarkdownMessage,page,onNavigate}){
   const filtered=conversations.filter(c=>(c.title||'').toLocaleLowerCase('vi').includes(filter.toLocaleLowerCase('vi')));
   const visible=opened;
   return <div className={'antam-assistant assistant-floating'+(expanded&&opened?' expanded':'')}>
-    {!opened&&<div className={'assistant-launcher-wrap'+(launcherCompact?' is-compact':'')} style={{bottom:launcherBottom}} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag}>
+    {!opened&&<div className={'assistant-launcher-wrap'+(launcherCompact?' is-compact':'')+(dragging?' is-dragging':'')} style={{bottom:launcherBottom}} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag}>
       <button className="assistant-launcher" type="button" onClick={launch} onKeyDown={keyboardDrag} title="Mở An Tâm AI · kéo lên/xuống để đổi vị trí" aria-label="Mở An Tâm AI (dùng mũi tên lên/xuống để di chuyển)" aria-expanded={false}><img src="/an-tam-mark.png" alt=""/><span>An Tâm AI</span><GripVertical className="assistant-drag-icon" size={16} aria-hidden="true"/></button>
       <button className="assistant-collapse-toggle" type="button" onClick={()=>setLauncherCompact(x=>!x)} title={launcherCompact?'Mở rộng nút AI':'Thu gọn nút AI vào mép phải'} aria-label={launcherCompact?'Mở rộng nút AI':'Thu gọn nút AI vào mép phải'}>{launcherCompact?<ChevronLeft size={16}/>:<ChevronRight size={16}/>}</button>
     </div>}
