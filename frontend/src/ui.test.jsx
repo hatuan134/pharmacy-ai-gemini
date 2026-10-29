@@ -88,6 +88,8 @@ it('chat shows persistent conversation history and creates new sessions',async()
   renderChat();
   fireEvent.click(screen.getByRole('button',{name:'Lịch sử trò chuyện'}));
   await screen.findByText('Tra cứu tồn kho');
+  expect(screen.queryByText('Còn 10 hộp')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:/Tra cứu tồn kho/}));
   expect(await screen.findByText('Còn 10 hộp')).toBeTruthy();
   fireEvent.click(screen.getAllByRole('button',{name:'Cuộc trò chuyện mới'})[0]);
   await waitFor(()=>expect(send).toHaveBeenCalledWith('/ai/conversations','POST',{}));
@@ -207,4 +209,52 @@ it('non-managers cannot access catalog settings',()=>{
   render(<SettingsPage user={{...user,role:'pharmacist'}}/>);
   expect(screen.queryByRole('button',{name:'Danh mục'})).toBeNull();
   expect(screen.getByLabelText('Mật khẩu hiện tại')).toBeTruthy();
+});
+
+it('settings catalogs paginate 10 rows independently and show pagination for a single page',async()=>{
+  const categories=Array.from({length:23},(_,i)=>({id:i+1,name:`Nhóm ${String(i+1).padStart(2,'0')}`}));
+  const units=Array.from({length:12},(_,i)=>({id:i+1,name:`Đơn vị ${String(i+1).padStart(2,'0')}`}));
+  api.mockImplementation(path=>Promise.resolve(path==='/categories'?categories:path==='/units'?units:data[path.split('?')[0]]??[]));
+  render(<SettingsPage user={user}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Danh mục'}));
+  const left=screen.getByRole('region',{name:'Nhóm thuốc'}),right=screen.getByRole('region',{name:'Đơn vị tính'});
+  await within(left).findByText('Nhóm 01');await within(right).findByText('Đơn vị 01');
+  expect(within(left).getAllByRole('row')).toHaveLength(11);
+  expect(within(right).getAllByRole('row')).toHaveLength(11);
+  expect(within(left).getByText(/10 dòng\/trang/)).toBeTruthy();
+  fireEvent.click(within(left).getByRole('button',{name:'Trang 2'}));
+  expect(within(left).getByText('Nhóm 11')).toBeTruthy();
+  expect(within(right).getByText('Đơn vị 01')).toBeTruthy();
+  expect(within(right).queryByText('Đơn vị 11')).toBeNull();
+  fireEvent.click(within(right).getByRole('button',{name:'Trang 2'}));
+  expect(within(right).getByText('Đơn vị 11')).toBeTruthy();
+});
+
+it('POS keeps one quantity editor per medicine and splits 10 units by FEFO',async()=>{
+  const lots=[{...batch,id:1,quantity:4,code:'LOT-EARLY',sale_price:'20000'}, {...batch,id:2,quantity:8,code:'LOT-LATE',expiry_date:'2028-03-01',sale_price:'25000'}];
+  api.mockResolvedValue(lots);
+  render(<POS user={user}/>);
+  fireEvent.click(await screen.findByRole('button',{name:/Thuốc kiểm thử A/}));
+  const input=screen.getByRole('spinbutton',{name:'Số lượng Thuốc kiểm thử A'});
+  fireEvent.change(input,{target:{value:'10'}});
+  expect(input.value).toBe('10');
+  fireEvent.blur(input);
+  expect(screen.getByRole('spinbutton',{name:'Số lượng Thuốc kiểm thử A'}).value).toBe('10');
+  expect(screen.getByText(/4 Hộp ×/)).toBeTruthy();
+  expect(screen.getByText(/6 Hộp ×/)).toBeTruthy();
+  send.mockResolvedValue({id:11,customer:'Khách lẻ',total:'230000',items:[],status:'paid'});
+  fireEvent.click(screen.getByRole('button',{name:'Xác nhận thanh toán'}));
+  await waitFor(()=>expect(send).toHaveBeenCalled());
+  expect(send.mock.calls[0][2].items).toEqual([{batch_id:1,quantity:4,expected_sale_price:'20000'},{batch_id:2,quantity:6,expected_sale_price:'25000'}]);
+});
+
+it('POS rejects overstock and clears stale alert when item removed',async()=>{
+  render(<POS user={user}/>);
+  fireEvent.click(await screen.findByRole('button',{name:/Thuốc kiểm thử A/}));
+  const input=screen.getByRole('spinbutton',{name:'Số lượng Thuốc kiểm thử A'});
+  fireEvent.change(input,{target:{value:'999'}});fireEvent.blur(input);
+  expect(screen.getByText(/chỉ còn 10 Hộp khả dụng/)).toBeTruthy();
+  expect(screen.getByRole('spinbutton',{name:'Số lượng Thuốc kiểm thử A'}).value).toBe('1');
+  fireEvent.click(screen.getByRole('button',{name:'Bỏ Thuốc kiểm thử A khỏi giỏ'}));
+  expect(screen.queryByText(/chỉ còn 10 Hộp khả dụng/)).toBeNull();
 });

@@ -61,8 +61,12 @@ export default function AIChat({user,MarkdownMessage,page,onNavigate}){
   async function loadList(){const list=await api('/ai/conversations');setConversations(list);return list;}
   useEffect(()=>{
     mounted.current=true;
-    (async()=>{try{const list=await loadList();if(list.length){const convo=await api(`/ai/conversations/${list[0].id}`);if(mounted.current){idRef.current=convo.id;setConversationId(convo.id);assignMessages(convo.messages||[]);}}}catch(e){if(mounted.current)setError('Không tải được lịch sử: '+e.message)}finally{if(mounted.current)setLoading(false)}})();
-    return()=>{mounted.current=false;controller.current?.abort();if(active.current)send(`/ai/session/${active.current}/stop`,'POST',{}).catch(()=>{})};
+    const ticket=++loadToken.current;
+    // Every login starts a blank chat. Saved conversations remain in History.
+    idRef.current=null;setConversationId(null);assignMessages([]);setConversations([]);
+    setQuestion('');setError('');setLoading(true);setHistoryOpen(false);
+    (async()=>{try{const list=await api('/ai/conversations');if(mounted.current&&ticket===loadToken.current)setConversations(list)}catch(e){if(mounted.current&&ticket===loadToken.current)setError('Không tải được lịch sử: '+e.message)}finally{if(mounted.current&&ticket===loadToken.current)setLoading(false)}})();
+    return()=>{mounted.current=false;++loadToken.current;controller.current?.abort();if(active.current)send(`/ai/session/${active.current}/stop`,'POST',{}).catch(()=>{})};
   },[user.id]);
   useEffect(()=>{if(opened||!floating)end.current?.scrollIntoView?.({block:'end'})},[messages,opened,activity,floating]);
   useEffect(()=>{try{window.localStorage.setItem('antam-ai-compact',String(launcherCompact))}catch{}},[launcherCompact]);

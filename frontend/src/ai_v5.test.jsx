@@ -10,7 +10,7 @@ const Mark=({text})=><div>{text}</div>;
 beforeEach(()=>{api.mockReset().mockResolvedValue([]);send.mockReset().mockResolvedValue({id:1,title:'Cuộc trò chuyện mới'});streamApi.mockReset()});
 afterEach(cleanup);
 
-it('restores saved content, cards, table and actions after close/open and remount',async()=>{
+it('keeps history accessible without auto-restoring saved conversation on login',async()=>{
   const c={id:7,title:'Kho',updated_at:'2026-10-28T08:00:00Z'};
   api.mockImplementation(async(path)=>path==='/ai/conversations'?[c]:{id:7,messages:[{
     id:99,role:'assistant',content:'Nội dung đã lưu',status:'complete',presentation:{
@@ -20,6 +20,11 @@ it('restores saved content, cards, table and actions after close/open and remoun
   const props={user:manager,MarkdownMessage:Mark,page:'batches'};
   let view=render(<AIChat {...props}/>);
   fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
+  expect(await screen.findByText('Bạn muốn tìm hiểu điều gì hôm nay?')).toBeTruthy();
+  expect(screen.queryByText('Nội dung đã lưu')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Lịch sử trò chuyện'}));
+  await screen.findByRole('button',{name:/Kho/});
+  fireEvent.click(screen.getByRole('button',{name:/Kho/}));
   await screen.findByText('Nội dung đã lưu');
   fireEvent.click(screen.getByRole('button',{name:'Đóng chatbot'}));
   fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
@@ -27,6 +32,11 @@ it('restores saved content, cards, table and actions after close/open and remoun
   view.unmount();
   view=render(<AIChat {...props}/>);
   fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
+  expect(await screen.findByText('Bạn muốn tìm hiểu điều gì hôm nay?')).toBeTruthy();
+  expect(screen.queryByText('Nội dung đã lưu')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Lịch sử trò chuyện'}));
+  await screen.findByRole('button',{name:/Kho/});
+  fireEvent.click(screen.getByRole('button',{name:/Kho/}));
   await screen.findByText('Nội dung đã lưu');
   expect(screen.getByText('Tổng tồn đã lưu')).toBeTruthy();
   expect(screen.getByText('Mặt hàng đã lưu')).toBeTruthy();
@@ -128,6 +138,11 @@ it('does not show a saved V5 chart after reopening conversation',async()=>{
   api.mockImplementation(async(path)=>path==='/ai/conversations'?[c]:{id:7,messages:[{id:99,role:'assistant',content:'Đã tra cứu 9 đơn vị.',presentation:{cards:[],table:null,chart:{title:'Biểu đồ cũ',bars:[{label:'A',value:9}]},actions:[]}}]});
   render(<AIChat user={manager} MarkdownMessage={Mark} page='batches'/>);
   fireEvent.click(screen.getByRole('button',{name:/Mở An Tâm AI/}));
+  expect(await screen.findByText('Bạn muốn tìm hiểu điều gì hôm nay?')).toBeTruthy();
+  expect(screen.queryByText('Đã tra cứu 9 đơn vị.')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Lịch sử trò chuyện'}));
+  await screen.findByRole('button',{name:/Tồn kho/});
+  fireEvent.click(screen.getByRole('button',{name:/Tồn kho/}));
   expect(await screen.findByText('Đã tra cứu 9 đơn vị.')).toBeTruthy();
   expect(screen.queryByText('Biểu đồ cũ')).toBeNull();
   expect(screen.queryByText('Sao chép')).toBeNull();

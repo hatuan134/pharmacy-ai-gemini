@@ -674,6 +674,8 @@ tbody tr:hover{background:#f6fbfa}
 .aligned-data-table .row-actions .text-button{white-space:nowrap}
 .aligned-data-table td.data-column-actions,.aligned-data-table th.data-column-actions{text-align:center}
 .aligned-data-table td select{max-width:100%;width:100%;font-size:12px;text-align:center;text-align-last:center}
+.aligned-data-table th.data-column-stt,.aligned-data-table td.data-column-stt{width:72px;text-align:center}
+.cell-index{display:inline-flex;align-items:center;justify-content:center;min-width:28px;color:#587268;font-weight:600}
 /* AI trả lời dạng bảng cũng dùng trục cột và căn tiêu đề/giá trị thống nhất. */
 .md-table-scroll table{table-layout:auto;width:100%;border-collapse:collapse}
 .md-table-scroll th,.md-table-scroll td{text-align:center;vertical-align:middle}
@@ -987,8 +989,16 @@ tbody tr:hover{background:#f6fbfa}
 .catalog-card .search{min-width:0;max-width:none}
 .catalog-card .aligned-data-table{min-width:0!important;table-layout:auto}
 .catalog-card .aligned-data-table :is(th,td){text-align:left;padding:13px 20px}
+.catalog-card .aligned-data-table td :is(.cell-text,.cell-title,small),.catalog-card .aligned-data-table td b{text-align:left}
+.catalog-card .aligned-data-table .data-column-stt{text-align:center;padding-inline:12px;white-space:nowrap}
 .catalog-card .aligned-data-table .data-column-actions{width:100px;text-align:right;white-space:nowrap}
 .catalog-card .row-actions{justify-content:flex-end}
 .catalog-card .empty{min-height:130px;padding:25px 20px}
 @media(max-width:1100px){.settings-catalog-grid{grid-template-columns:1fr}.settings-catalogs{max-width:720px}.catalog-card{display:block;grid-row:auto}.catalog-card+.catalog-card{border-left:0;border-top:1px solid var(--border)}}
 @media(max-width:480px){.catalog-card-heading{flex-wrap:wrap}.catalog-card-heading p{max-width:none}}
+
+/* POS: quantities are edited per medicine; FEFO batch allocations are read-only. */
+.cart-medicine .cart-lot-details { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid var(--border, #dce6e5); display: grid; gap: 5px; }
+.cart-lot-detail { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: #617683; }
+.cart-lot-detail span:last-child { text-align: right; white-space: nowrap; }
+@media (max-width: 480px) { .cart-lot-detail { flex-wrap: wrap; } }
