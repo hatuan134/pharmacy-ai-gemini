@@ -43,7 +43,7 @@ def plain(value):
 
 def blocked(value):
     s = plain(value)
-    return bool(re.search(r'ke don|chan doan|lieu dung|uong (may|bao nhieu)|dieu tri|chua benh|bo qua.*(lenh|chi dan)|ignore.*(instruction|previous)|system prompt|api.?key|mat khau|prescrib|dosage|diagnos|treat my|reveal.*prompt', s))
+    return bool(re.search(r'ke don (?:cho|giup|theo benh)|(?:hay |can |giup toi )ke don|chan doan|lieu dung|uong (may|bao nhieu)|dieu tri|chua benh|bo qua.*(lenh|chi dan)|ignore.*(instruction|previous)|system prompt|api.?key|mat khau|prescrib|dosage|diagnos|treat my|reveal.*prompt', s))
 
 
 def safe_summary_line(value):
@@ -315,7 +315,13 @@ def answer(db, request, user):
 # ---------------------------------------------------------------------------
 # Unified conversational assistant (v2)
 # ---------------------------------------------------------------------------
-CHAT_SYNTH_SYSTEM = '''Bạn là An Tâm AI - trợ lý vận hành nhà thuốc. Trả lời bằng tiếng Việt tự nhiên như người đồng nghiệp am hiểu nghiệp vụ, thân thiện, mạch lạc, không máy móc. Trả lời thẳng câu hỏi ở câu đầu, chỉ liệt kê khi thật sự hữu ích, và gợi ý bước tiếp theo ngắn gọn khi phù hợp.
+CHAT_SYNTH_SYSTEM = '''ƯU TIÊN TUYỆT ĐỐI: Trả lời đúng ý người dùng và đúng độ dài họ cần.
+Câu hỏi chỉ yêu cầu một số tiền/số lượng: trả lời đúng MỘT câu, chỉ số và kỳ đang hỏi, không tự thêm hóa đơn, phân tích, tiêu đề, bảng, gợi ý hoặc kết luận khác.
+Chỉ dùng bảng/biểu đồ cho câu hỏi yêu cầu liệt kê, so sánh hay phân tích.
+Nếu câu hỏi không cần dữ liệu nội bộ (ví dụ chào hỏi), trả lời trực tiếp bằng hội thoại tự nhiên, không ngụ ý đã truy vấn cơ sở dữ liệu.
+Các câu hỏi tiếp nối ngắn phải đối chiếu HISTORY để hiểu thực thể/kỳ đang được hỏi; không tự dùng số liệu lịch sử làm dữ liệu mới.
+Nếu công cụ trả lỗi, dữ liệu rỗng hoặc bị cắt, phải nói đúng giới hạn và không bịa số.
+Bạn là An Tâm AI - trợ lý vận hành nhà thuốc. Trả lời bằng tiếng Việt tự nhiên như người đồng nghiệp am hiểu nghiệp vụ, thân thiện, mạch lạc, không máy móc. Trả lời thẳng câu hỏi ở câu đầu, chỉ liệt kê khi thật sự hữu ích, và gợi ý bước tiếp theo ngắn gọn khi phù hợp.
 Với câu hỏi về số liệu, thuốc hoặc thông tin trong nhà thuốc, chỉ dựa vào TOOL_RESULTS, không bịa dữ liệu.
 Với câu hỏi hướng dẫn thao tác/nghiệp vụ, được giải thích từ các chức năng thực tế sau:
 - Quản lý được sửa giá bán, điều chỉnh tồn (ghi lý do), hủy hóa đơn và xem doanh thu tổng.
@@ -339,7 +345,9 @@ Không lặp các nhãn kỹ thuật như 'Phân tích AI', 'Bản chiếu', 'Tr
 class ChatToolCall(BaseModel):
     name: Literal[
         'medicine_search', 'inventory_search', 'expiry_alerts', 'low_stock', 'stock_risk',
-        'sales_summary', 'system_data'
+        'sales_summary', 'system_data', 'overview_counts', 'stock_balance', 'alert_counts',
+        'report_view', 'dashboard_view', 'medicine_catalog',
+        'invoice_records', 'batch_records', 'movement_records', 'supplier_records', 'staff_records'
     ]
     query: str = ''
     days: int = Field(default=90, ge=1, le=365)
@@ -356,19 +364,22 @@ AI_TOOL_PERMISSIONS = {
     # Quản lý: toàn bộ dữ liệu nghiệp vụ AI được phép đọc.
     'manager': {
         'medicine_search', 'inventory_search', 'expiry_alerts', 'low_stock',
-        'stock_risk', 'sales_summary', 'system_data',
+        'stock_risk', 'sales_summary', 'system_data', 'overview_counts', 'stock_balance', 'alert_counts',
+        'report_view', 'dashboard_view', 'medicine_catalog', 'invoice_records', 'batch_records', 'movement_records', 'supplier_records', 'staff_records',
     },
     # Dược sĩ: nghiệp vụ thuốc/kho và hóa đơn chi tiết; không xem báo cáo doanh thu
     # tổng hợp hay dữ liệu tài khoản/phân quyền qua AI.
     'pharmacist': {
         'medicine_search', 'inventory_search', 'expiry_alerts', 'low_stock',
-        'stock_risk', 'system_data',
+        'stock_risk', 'system_data', 'overview_counts', 'stock_balance', 'alert_counts',
+        'dashboard_view', 'medicine_catalog', 'invoice_records', 'batch_records', 'movement_records', 'supplier_records',
     },
     # Thu ngân: tra cứu phục vụ bán hàng. Giá nhập, nhà cung cấp, báo cáo tổng hợp,
     # biến động kho và tài khoản được chặn ở backend.
     'cashier': {
         'medicine_search', 'inventory_search', 'expiry_alerts', 'low_stock',
-        'system_data',
+        'system_data', 'overview_counts', 'stock_balance', 'alert_counts',
+        'dashboard_view', 'medicine_catalog', 'invoice_records',
     },
 }
 
@@ -390,8 +401,13 @@ def _role_access_denied_reason(question, role):
     s = plain(question)
     if re.search(r'nhan vien|tai khoan|phan quyen|nguoi dung|user', s) and not re.search(r'hoa don|invoice', s):
         return 'Vai trò hiện tại không được phép tra cứu tài khoản hoặc phân quyền qua An Tâm AI.'
-    if re.search(r'doanh thu|tien ban|bao cao ban|doanh so|revenue|sales summary|loi nhuan|tong tien.*hoa don|tong gia tri.*hoa don|cong tien.*hoa don|tinh tong.*hoa don', s):
+    own_shift = role == 'cashier' and bool(re.search(r'(ca (hom nay|cua toi)|ca ban hang cua toi|ca cua toi)', s)) and not re.search(r'to[aà]n nha thuoc|tat ca|tong doanh thu nha thuoc|nhan vien khac',s)
+    exact_invoice = bool(re.search(r'(?:hoa don|don hang|invoice)\s*(?:so|ma|#)?\s*#?\s*\d+\b',s))
+    aggregate_revenue = bool(re.search(r'doanh thu|tien ban|bao cao ban|doanh so|revenue|sales summary|loi nhuan|tinh tong.*hoa don',s) or (not exact_invoice and re.search(r'tong tien.*hoa don|tong gia tri.*hoa don|cong tien.*hoa don',s)))
+    if not own_shift and aggregate_revenue:
         return 'Chỉ Quản lý được phép tra cứu báo cáo doanh thu tổng hợp qua An Tâm AI.'
+    if re.search(r'gia tri ton kho|von ton kho|von ton|thuoc ban chay|top\s*\d+.*ban|xu huong doanh thu|bieu do doanh thu|bao cao hoat dong|loi nhuan gop', s):
+        return 'Chỉ Quản lý được phép xem dữ liệu báo cáo tổng hợp qua An Tâm AI.'
     if role == 'cashier':
         if re.search(r'gia nhap|purchase price|von hang|gia von', s):
             return 'Thu ngân không được phép xem giá nhập hoặc giá vốn qua An Tâm AI.'
@@ -423,7 +439,11 @@ def _fallback_chat_plan(question, role):
     s = plain(question)
     calls = []
 
-    if re.search(r'doanh thu|tien ban|bao cao ban|doanh so|sales summary|revenue', s):
+    if re.search(r'ke don|dang kinh doanh|ngung kinh doanh',s) and re.search(r'thuoc|danh muc',s):
+        return ChatPlan(calls=[ChatToolCall(name='medicine_catalog',query=question)])
+    if role == 'manager' and re.search(r'gia tri ton|von ton|ban chay|top\s*\d+.*ban|xu huong doanh thu|bieu do doanh thu|bao cao hoat dong|tinh hinh ton kho', s):
+        return ChatPlan(calls=[ChatToolCall(name='report_view', query=question)])
+    if re.search(r'doanh thu|tien ban|bao cao ban|doanh so|sales summary|revenue', s) and not any(c.name=='report_view' for c in calls):
         calls.append(ChatToolCall(name='sales_summary', query=question))
 
     system_catalog_query = re.search(r'nha cung cap|nhan vien|tai khoan|phan quyen|nhom thuoc|don vi|bien dong|lich su kho', s)
@@ -534,7 +554,12 @@ def _tool_medicine_search(db, query):
     if exact: picked = exact
     data, sources = [], []
     for m in picked:
-        data.append({'id': m.id, 'code': m.code, 'name': m.name, 'prescription_required': m.prescription_required, 'information': _clip(m.information, 1600), 'source': m.source})
+        category=db.scalar(select(Category.name).where(Category.id==m.category_id))
+        unit=db.scalar(select(Unit.name).where(Unit.id==m.unit_id))
+        data.append({'id': m.id, 'code': m.code, 'name': m.name,
+                     'category': category, 'unit': unit, 'min_stock': m.min_stock,
+                     'prescription_required': m.prescription_required, 'active': m.active,
+                     'information': (m.information or '')[:3200], 'source': m.source})
         sources.append({'id': f'medicine:{m.id}', 'title': m.name, 'reference': m.source or f'Thuốc #{m.id}', 'kind': 'internal'})
     return data, sources
 
@@ -649,8 +674,8 @@ def _tool_system_data(db, query, role):
         'categories': (Category, ['id', 'name']),
         'units': (Unit, ['id', 'name']),
         'users': (User, ['id', 'username', 'name', 'role', 'active']),
-        'invoices': (Invoice, ['id', 'user_id', 'customer', 'created_at', 'total', 'status', 'payment_method']),
-        'invoice_items': (InvoiceItem, ['id', 'invoice_id', 'batch_id', 'medicine_name', 'quantity', 'sale_price', 'purchase_price']),
+        'invoices': (Invoice, ['id', 'user_id', 'customer', 'created_at', 'total', 'status', 'payment_method', 'prescription_ref', 'cancel_reason']),
+        'invoice_items': (InvoiceItem, ['id', 'invoice_id', 'batch_id', 'medicine_name', 'quantity', 'unit_name', 'sale_price', 'purchase_price']),
         'movements': (Movement, ['id', 'batch_id', 'user_id', 'delta', 'balance', 'kind', 'reason', 'created_at']),
     }
     allowed = SYSTEM_DATA_PERMISSIONS.get(role, set())
@@ -686,6 +711,96 @@ def _tool_system_data(db, query, role):
     return data, sources
 
 
+def _tool_stock_balance(db, query, role):
+    """Exact available stock per matching medicine, not a capped batch total."""
+    # Retrieve only safe medication identification; never treat an arbitrary
+    # number in the question as a requested database primary key.
+    words=re.findall(r'[a-z0-9-]{3,}',plain(query))
+    stop={'thuoc','con','bao','nhieu','hien','tai','trong','ton','kho','gia',
+          'may','hop','loai','luong','hang','ban','cua','mot','cho','toi',
+          'kiem','tra','tinh','tong','so','duoc','pham','the','nao','khong',
+          'theo','ban','dung','can','liet','ke','cuoi','nay','lo'}
+    terms=[w for w in words if w not in stop]
+    # Name or medicine code matches one or more meaningful user terms. A code
+    # can be short (e.g. M1), so prefer an explicit whole-code match.
+    meds=list(db.scalars(select(Medicine).order_by(Medicine.name)))
+    query_normalized=plain(query)
+    found=[]
+    for m in meds:
+        name=plain(m.name+' '+m.code)
+        code=plain(m.code)
+        exact_code=bool(code and re.search(r'(?<!\w)'+re.escape(code)+r'(?!\w)',query_normalized))
+        matches=(100 if exact_code else 0)+sum(1 for t in terms if t in name)
+        if matches:
+            found.append((matches,m))
+    if not found:
+        return {'matches':[],'ambiguous':False},[]
+    found.sort(key=lambda pair:(-pair[0],plain(pair[1].name)))
+    best=found[0][0]
+    picked=[m for score,m in found if score==best]
+    out=[];sources=[]
+    for m in picked[:5]:
+        if not m.active:
+            available=0
+        else:
+            available=int(db.scalar(select(func.sum(Batch.quantity)).where(
+                Batch.medicine_id==m.id,Batch.quantity>0,Batch.expiry_date>settings_today())) or 0)
+        unit_name=db.scalar(select(Unit.name).where(Unit.id==m.unit_id)) or ''
+        out.append({'medicine':m.name,'code':m.code,'available_stock':available,'unit':unit_name})
+        sources.append({'id':f'medicine:{m.id}','title':m.name,'reference':'Tồn khả dụng theo lô còn hạn','kind':'internal'})
+    return {'matches':out,'ambiguous':len(picked)>1,'truncated':len(picked)>5},sources
+
+
+def settings_today():
+    # Local Vietnamese date, shared with alerts/FEFO rules.
+    from .config import today
+    return today()
+
+
+def _tool_alert_counts(db, query, days=90):
+    """Exact number of qualifying lots or low-stock medicines."""
+    q=plain(query)
+    data=alerts(db,days)
+    if re.search(r'ton thap|ton kho thap|duoi nguong|sap het hang',q):
+        label='Thuốc tồn kho thấp'
+        value=len(data['low_stock'])
+    elif re.search(r'loai thuoc|thuoc',q) and not re.search(r'bao nhieu lo|so lo',q):
+        label='Loại thuốc có lô sắp/hết hạn'
+        value=len({r['medicine_id'] for r in data['expiry']})
+    else:
+        label='Lô cần chú ý theo hạn dùng'
+        value=len(data['expiry'])
+    return {'metric':label,'count':value,'days':days}, [
+        {'id':'alerts:counts','title':'Thống kê cảnh báo','reference':'Dữ liệu lô và tồn thực tế','kind':'internal'}]
+
+
+def _tool_overview_counts(db, query, role):
+    """Fast, exact database counts for a single requested entity only."""
+    q=plain(query)
+    kind=None
+    if re.search(r'nhan vien|tai khoan',q) and role=='manager':
+        kind,model='Nhân viên',User
+    elif re.search(r'nha cung cap',q) and role in ('manager','pharmacist'):
+        kind,model='Nhà cung cấp',Supplier
+    elif re.search(r'nhom thuoc|danh muc thuoc',q):
+        kind,model='Nhóm thuốc',Category
+    elif re.search(r'don vi tinh|don vi thuoc',q):
+        kind,model='Đơn vị tính',Unit
+    elif re.search(r'lo thuoc|lo nhap|so lo ',q):
+        kind,model='Lô thuốc',Batch
+    elif re.search(r'thuoc|duoc pham',q):
+        kind,model='Loại thuốc',Medicine
+    if not kind:
+        return {},[]
+    stmt=select(func.count()).select_from(model)
+    if model in (Medicine, Supplier, User) and re.search(r'dang (kinh doanh|hoat dong|hop tac)|con (kinh doanh|hoat dong)|hoat dong', q):
+        stmt=stmt.where(model.active.is_(True))
+    count=int(db.scalar(stmt) or 0)
+    return {'metric':kind,'count':count}, [{'id':'count:'+model.__tablename__,
+            'title':'Số lượng '+kind.lower(),'reference':'Dữ liệu hiện tại của nhà thuốc',
+            'kind':'internal'}]
+
+
 def execute_chat_tools(db, plan, user):
     results = []
     sources = []
@@ -695,7 +810,25 @@ def execute_chat_tools(db, plan, user):
         # plan cannot execute a tool outside the authenticated role.
         if call.name not in allowed:
             continue
-        if call.name == 'medicine_search':
+        if call.name in {'invoice_records','batch_records','movement_records','supplier_records','staff_records'}:
+            from . import screen_detail
+            data,src = getattr(screen_detail,call.name)(db,call.query,user)
+        elif call.name == 'medicine_catalog':
+            from .screen_tools import medicine_catalog
+            data,src = medicine_catalog(db,call.query,user)
+        elif call.name == 'report_view':
+            from .screen_tools import report_view
+            data, src = report_view(db, call.query, user)
+        elif call.name == 'dashboard_view':
+            from .screen_tools import dashboard_view
+            data, src = dashboard_view(db, call.query, user)
+        elif call.name == 'stock_balance':
+            data, src = _tool_stock_balance(db, call.query, user.role)
+        elif call.name == 'alert_counts':
+            data, src = _tool_alert_counts(db, call.query, call.days)
+        elif call.name == 'overview_counts':
+            data, src = _tool_overview_counts(db, call.query, user.role)
+        elif call.name == 'medicine_search':
             data, src = _tool_medicine_search(db, call.query)
         elif call.name == 'inventory_search':
             data, src = _tool_inventory_search(db, call.query, user.role)
@@ -880,39 +1013,37 @@ def _fallback_reason_text(reason):
 
 
 def _ai_unavailable_answer(results, reason):
-    """Fallback is explicitly data-only; it does not impersonate AI."""
-    raw = _data_only_answer(results)
-    return (
-        f"AI tạm thời không khả dụng. {_fallback_reason_text(reason)}\n\n"
-        "Phần phân tích/tổng hợp bằng AI chưa được thực hiện. "
-        "Dưới đây chỉ là dữ liệu trực tiếp từ hệ thống:\n\n"
-        + raw
-    )
+    """Never leak unsynthesized tool/SQL results as an AI response."""
+    return 'An Tâm AI hiện chưa thể kết nối với dịch vụ AI. Vui lòng thử lại sau.'
 
 
-# Backward-compatible name for old tests/callers. The semantics are intentionally
-# different now: fallback clearly states that no AI synthesis was performed.
 def _fallback_chat_answer(results, denied=False):
-    if denied:
-        return 'Tài khoản của bạn không có quyền truy cập dữ liệu này.'
-    return _ai_unavailable_answer(results, 'api')
+    return ('Tài khoản của bạn không có quyền truy cập dữ liệu này.' if denied
+            else _ai_unavailable_answer(results, 'unavailable'))
 
 
 def synthesize_chat(request, user, results):
     """One Gemini call: backend already selected and queried the data tools."""
-    if not settings.gemini_api_key:
+    if not settings.gemini_api_key and not settings.groq_api_key:
         raise GeminiAPIError()
     payload = {
         'model': settings.gemini_model,
         'store': False,
-        'input': CHAT_SYNTH_SYSTEM + '\n\nROLE: ' + user.role + '\nHISTORY:\n' + _history_text(request.history) +
-                 '\nQUESTION:\n' + request.message + '\n\nTOOL_RESULTS JSON:\n' + json.dumps(results, ensure_ascii=False, default=str)[:60000],
+        'input': CHAT_SYNTH_SYSTEM + '\n\n' + _stream_prompt(request, user, results),
     }
-    data = _gemini_interaction(payload, timeout=30)
-    output = _interaction_text(data)
-    if not output:
+    if settings.gemini_api_key:
+        try:
+            data = _gemini_interaction(payload, timeout=20)
+            output = _interaction_text(data)
+            if output:
+                return output, data.get('_app_model_used', settings.gemini_model)
+        except (GeminiAuthError, GeminiAPIError, GeminiRateLimitError, httpx.RequestError, ValueError):
+            pass
+    from .llm_providers import groq_complete
+    try:
+        return groq_complete(CHAT_SYNTH_SYSTEM, _stream_prompt(request, user, results))
+    except ValueError:
         raise GeminiAPIError()
-    return output, data.get('_app_model_used', settings.gemini_model)
 
 
 def _record_chat(db, request, user, text, status, sources, tools, model):
@@ -961,10 +1092,196 @@ def _prepare_legacy_chat(db, request, user):
     }
 
 
+# Fast routing is deliberately conservative: do not confuse a vague follow-up
+# or a multi-entity request with a single verified metric.
+_COMPLEX_REQUEST = re.compile(
+    r'phan tich|so sanh|chenh lech|vi sao|nguyen nhan|du bao|xu huong|'
+    r'danh gia|nhan xet|toi uu|de xuat|goi y|ket hop|dong thoi|vua .*vua |'
+    r'bao cao (chi tiet|tong hop)|theo tung (ngay|thang|tuan)|'
+    r'nhieu dieu kien|tinh hinh (kinh doanh|nha thuoc)'
+)
+
+
+def _recent_subject(request):
+    """Return only the newest explicit user subject, never trust model-written facts."""
+    for turn in reversed(request.history[-12:]):
+        if turn.role != 'user':
+            continue
+        text = plain(turn.content)
+        if re.search(r'doanh thu|doanh so|tien ban|revenue', text):
+            return 'revenue', turn.content
+        if re.search(r'hoa don|invoice', text):
+            return 'invoice', turn.content
+        if re.search(r'ton kho|thuoc|so lo|han dung|gia ban', text):
+            return 'medicine', turn.content
+    return None, ''
+
+
+def _fast_intent(request, role):
+    """Use one verified tool + one LLM call for unambiguous intents only."""
+    q = plain(request.message.strip())
+    if not q:
+        return None
+    if re.fullmatch(r'(xin chao|chao|hello|hi|cam on|ban la ai|ban lam duoc gi)[!.? ]*', q):
+        return ChatPlan(calls=[]), request.message
+    if role=='manager' and re.search(r'xu huong doanh thu|bieu do doanh thu|do thi doanh thu|doanh thu tung ngay',q) and not re.search(r'so sanh|phan tich|vi sao|nguyen nhan',q):
+        return ChatPlan(calls=[ChatToolCall(name='report_view',query=request.message)]),request.message
+    if _COMPLEX_REQUEST.search(q):
+        return None
+    if not re.search(r'thuoc|duoc|lo (thuoc|nhap)|ma lo|\bkho\b|\bton\b|nha cung cap|nhom|danh muc|hoa don|doanh|gia (nhap|ban)|ban hang|hang hoa|kiem ke|quy trinh|huong dan|nhan vien|tai khoan|phan quyen|so luong|bao nhieu|lich su|doi gia|thang|hom nay|hom qua|tuan|he thong|an tam|nha thuoc|thu ngan|quan ly|duoc si|sap het han|ke don|dang kinh doanh|ngung kinh doanh|thong tin tham khao|nguong canh bao|nguon thong tin', q):
+        # Pure conversation doesn't need a tool-selector API round trip.
+        return ChatPlan(calls=[]), request.message
+
+    if role == 'cashier' and re.search(r'(ca (hom nay|cua toi)|ca ban hang cua toi|ca cua toi)',q) and re.search(r'doanh thu|doanh so|tien ban|hoa don|ban duoc bao nhieu',q):
+        return ChatPlan(calls=[ChatToolCall(name='dashboard_view',query=request.message)]), request.message
+    if re.search(r'\bat\d{3,}\b',q) and re.search(r'thuoc|nhom|don vi|nguong|thong tin|nguon|ke don',q):
+        return ChatPlan(calls=[ChatToolCall(name='medicine_search',query=request.message)]),request.message
+    if re.search(r'ke don|dang kinh doanh|ngung kinh doanh',q) and re.search(r'thuoc|danh muc',q):
+        return ChatPlan(calls=[ChatToolCall(name='medicine_catalog',query=request.message)]),request.message
+    if re.search(r'nhom.*thuoc|thuoc.*nhom',q) and re.search(r'danh sach|thuoc nao|nhung thuoc|bao nhieu',q) and not re.search(r'(danh sach|bao nhieu|co may) (nhom thuoc|nhom)',q):
+        return ChatPlan(calls=[ChatToolCall(name='medicine_catalog',query=request.message)]),request.message
+    if re.search(r'(trung tam dieu hanh|tong quan nha thuoc|bang dieu khien|tong quan ca|ban lam viec duoc si)',q):
+        return ChatPlan(calls=[ChatToolCall(name='dashboard_view',query=request.message)]),request.message
+    requested_top=re.search(r'top\s*(\d+)',q)
+    if requested_top and int(requested_top.group(1))>5:
+        return None
+    # Explicit report screen data must take precedence over broad 'revenue' and
+    # inventory matching; report_view only exists for managers.
+    if role=='manager' and re.search(r'gia tri ton|von ton|ban chay|top\s*\d+.*ban|xu huong doanh thu|bieu do doanh thu|bao cao hoat dong|tinh hinh ton kho|so lo con han|so lo sap het han|so lo da het han',q):
+        return ChatPlan(calls=[ChatToolCall(name='report_view',query=request.message)]),request.message
+    # One-hop contextual references, without interpreting a previous AI answer
+    # as authoritative data. Re-query for updated facts each time.
+    if re.fullmatch(r'(the |con |vay )?(hom qua|hom nay|thang truoc|thang nay|tuan truoc|tuan nay)( thi sao)?[?.! ]*', q):
+        subject, _ = _recent_subject(request)
+        if role == 'manager' and subject in ('revenue', 'invoice'):
+            return ChatPlan(calls=[ChatToolCall(name='sales_summary', query='Doanh thu '+request.message)]), request.message
+        return None
+
+    if re.search(r'quy trinh|huong dan|lam the nao|cach (nhap lo|kiem ke|ban thuoc|tao hoa don|doi gia|su dung (phan mem|he thong))',q):
+        # The model is grounded by the system's known role-specific feature guide.
+        return ChatPlan(calls=[]), request.message
+
+    # Exact screen records take precedence over broad sales and catalog routes.
+    # This gives each role the same visible details as its corresponding page.
+    if re.search(r'(hoa don|don hang|invoice)\s*(?:so|ma|#)?\s*#?\s*\d+\b',q):
+        return ChatPlan(calls=[ChatToolCall(name='invoice_records',query=request.message)]),request.message
+    # Date-scoped invoice browsing is visible in the Hóa đơn screen for all
+    # roles; manager's dedicated paid-invoice count still uses sales_summary.
+    if re.search(r'hoa don',q) and re.search(r'hom nay|hom qua|tuan (nay|truoc)|thang (nay|truoc)|\d+\s*ngay qua',q) and not (role=='manager' and re.search(r'bao nhieu|tong so|so luong|dem',q)):
+        return ChatPlan(calls=[ChatToolCall(name='invoice_records',query=request.message)]),request.message
+    if re.search(r'chi tiet (hoa don|don hang)|don (hang|ban) (gan day|moi nhat)|danh sach hoa don|hoa don (da huy|da thanh toan)',q):
+        return ChatPlan(calls=[ChatToolCall(name='invoice_records',query=request.message)]),request.message
+    if role in ('manager','pharmacist') and re.search(r'lich su (bien dong|kho|kiem ke|nhap lo|doi gia)|bien dong kho|lich su dieu chinh|ai (da )?(kiem ke|doi gia)',q):
+        return ChatPlan(calls=[ChatToolCall(name='movement_records',query=request.message)]),request.message
+    if role in ('manager','pharmacist') and re.search(r'chi tiet (lo|lo nhap)|ngay nhap (lo|thuoc)|lo nhap (ma|so)|danh sach (lo nhap|lo thuoc)',q):
+        return ChatPlan(calls=[ChatToolCall(name='batch_records',query=request.message)]),request.message
+    if role in ('manager','pharmacist') and re.search(r'dia chi|so dien thoai|lien he|trang thai hop tac',q) and re.search(r'nha cung cap|ncc',q):
+        return ChatPlan(calls=[ChatToolCall(name='supplier_records',query=request.message)]),request.message
+    if role=='manager' and re.search(r'(danh sach|chi tiet|vai tro|trang thai|hoat dong|da khoa).*?(tai khoan|nhan vien|phan quyen)|(?:tai khoan|nhan vien).*?(nao|ten|vai tro|hoat dong|da khoa)',q):
+        return ChatPlan(calls=[ChatToolCall(name='staff_records',query=request.message)]),request.message
+    # Sales summary provides revenue and paid-invoice count. Do not request the
+    # unauthorized aggregate for cashier/pharmacist even for an invoice question.
+    sales_amount = bool(re.search(r'doanh thu|doanh so|tien ban|revenue', q))
+    invoice_count = bool(re.search(r'(bao nhieu|so luong|dem|tong so) (hoa don|don hang)|hoa don.*(bao nhieu|so luong)', q))
+    if (sales_amount or invoice_count) and role == 'manager':
+        return ChatPlan(calls=[ChatToolCall(name='sales_summary', query=request.message)]), request.message
+
+    count_phrase=bool(re.search(r'bao nhieu|co may|tong so|dem so',q))
+    if count_phrase and re.search(r'sap het han|da het han|het han trong|ton thap|ton kho thap|duoi nguong|sap het hang',q):
+        found=re.search(r'(\d{1,3})\s*ngay',q)
+        days=max(1,min(365,int(found.group(1)))) if found else 90
+        return ChatPlan(calls=[ChatToolCall(name='alert_counts',query=request.message,days=days)]), request.message
+
+    # Exact cross-table counts use an indexed SQL COUNT, not expensive
+    # capped search lists or a model-generated SQLite snapshot.
+    if re.search(r'bao nhieu|tong so|so luong|dem so',q) and re.search(r'loai thuoc|thuoc|nhom thuoc|don vi tinh|lo thuoc|nha cung cap|nhan vien|tai khoan',q):
+        if (role == 'cashier' and re.search(r'nha cung cap|nhan vien|tai khoan',q)) or (role != 'manager' and re.search(r'nhan vien|tai khoan',q)):
+            return None
+        # A named medicine's stock count is not a catalog count.
+        if not re.search(r'(con bao nhieu|con may|ton kho|ton bao nhieu|trong kho)',q):
+            return ChatPlan(calls=[ChatToolCall(name='overview_counts',query=request.message)]),request.message
+
+    days_match = re.search(r'(\d{1,3})\s*ngay',q)
+    days = max(1, min(365, int(days_match.group(1)))) if days_match else 90
+    if re.search(r'^(cac |nhung |danh sach |co |hien )?(lo |thuoc )?(sap het han|da het han|het han trong)|lo thuoc.*sap het han',q):
+        return ChatPlan(calls=[ChatToolCall(name='expiry_alerts',days=days)]), request.message
+    if re.search(r'ton (kho )?(thap|duoi nguong)|thuoc sap het hang|thuoc can nhap them',q):
+        return ChatPlan(calls=[ChatToolCall(name='low_stock')]), request.message
+    if re.search(r'thuoc (nao|gi) ban cham|thuoc (nao|gi) ton nhieu|ton kho lau|thuoc ban cham',q):
+        if role != 'cashier':
+            return ChatPlan(calls=[ChatToolCall(name='stock_risk',query=request.message)]), request.message
+    if re.search(r'\bat\d{3,}\b',q) and re.search(r'thuoc|nhom|don vi|nguong|thong tin|nguon|ke don',q):
+        return ChatPlan(calls=[ChatToolCall(name='medicine_search',query=request.message)]),request.message
+    if re.search(r'nha cung cap|nhom thuoc|don vi tinh|danh sach (nhan vien|tai khoan)|phan quyen',q):
+        if role == 'cashier' and re.search(r'nha cung cap|nhan vien|tai khoan|phan quyen',q):
+            return None  # RBAC denial is handled before routing.
+        return ChatPlan(calls=[ChatToolCall(name='system_data',query=request.message)]), request.message
+    if re.search(r'(danh sach|chi tiet|ma|trang thai|tim) (hoa don|don hang)|hoa don (so|ma) ?[0-9]',q):
+        return ChatPlan(calls=[ChatToolCall(name='system_data',query=request.message)]), request.message
+
+    if re.search(r'thong tin tham khao|nguong canh bao|nguon thong tin',q) and not re.search(r'nha cung cap|hoa don|nhan vien',q):
+        return ChatPlan(calls=[ChatToolCall(name='medicine_search',query=request.message)]),request.message
+    # Ask about a named medicine: distinguish information vs inventory/lots.
+    about_medicine = bool(re.search(r'thuoc|duoc pham|paracetamol|vitamin|so lo|lo thuoc|ma thuoc|\bat\d{3,}\b',q))
+    if about_medicine and re.search(r'thong tin|tom tat|thanh phan|nguon|hoat chat|mo ta|nguong|don vi|nhom|ke don|kinh doanh|chi tiet',q):
+        return ChatPlan(calls=[ChatToolCall(name='medicine_search',query=request.message)]), request.message
+    if about_medicine and re.search(r'con bao nhieu|con may|ton kho|so luong|so lo|lo nao|gia ban|gia nhap|han dung|con hang|con ton',q):
+        if re.search(r'tong so (loai )?thuoc|bao nhieu (loai )?thuoc|tat ca thuoc',q):
+            return None
+        if re.search(r'con bao nhieu|con may|so luong ton|ton bao nhieu',q) and not re.search(r'lo nao|so lo|gia ban|gia nhap',q):
+            return ChatPlan(calls=[ChatToolCall(name='stock_balance',query=request.message)]),request.message
+        return ChatPlan(calls=[ChatToolCall(name='inventory_search',query=request.message)]), request.message
+    return None
+
+
+def _needs_advanced_agent(request):
+    """Reserve the full iterative SQL planner for genuinely deep analysis."""
+    q = plain(request.message)
+    if _COMPLEX_REQUEST.search(q):
+        return True
+    if re.search(r'top \d+|nhieu nhat|it nhat|cao nhat|thap nhat',q):
+        return True  # whole-table aggregation; capped list tools cannot answer.
+    return False
+
+
 def _prepare_chat(db, request, user):
-    if not getattr(request, "agent", False):
+    if not getattr(request, 'agent', False):
         return _prepare_legacy_chat(db, request, user)
+    # Enforce permissions and safety BEFORE routing either provider or DB tool.
+    denied = _role_access_denied_reason(request.message, user.role)
+    if denied:
+        return {'terminal': True, 'message': denied, 'status':'access_denied',
+                'results':[], 'sources':[], 'used_tools':[], 'needs_ai':False}
+    if blocked(request.message) or _external_lookup_requested(request.message):
+        return {'terminal':True, 'message':'An Tâm AI chỉ hỗ trợ tra cứu an toàn trong hệ thống nhà thuốc.',
+                'status':'blocked','results':[], 'sources':[], 'used_tools':[], 'needs_ai':False}
+    fast = _fast_intent(request,user.role)
+    if fast is not None:
+        plan, _ = fast
+        results, sources = execute_chat_tools(db, plan, user)
+        return {'terminal':False, 'message':None, 'status':None,
+                'results':results, 'sources':sources,
+                'used_tools':[r['tool'] for r in results], 'needs_ai':True,
+                'fast':True}
     from .agent import prepare
+    if _needs_advanced_agent(request):
+        return prepare(db, request, user)
+    # Native Gemini/Groq Function Calling: one bounded selection round, no
+    # separate planner + review round for ordinary open-ended requests.
+    from .direct_tools import select_native_tools, execute_native_tools
+    selected = select_native_tools(request, user)
+    if selected is not None:
+        if not selected:
+            # The model explicitly determined no database read is required.
+            return {'terminal':False, 'message':None, 'status':None,
+                    'results':[], 'sources':[], 'used_tools':[],
+                    'needs_ai':True, 'route':'conversation'}
+        results,sources=execute_native_tools(db,selected,user)
+        if results:
+            return {'terminal':False, 'message':None, 'status':None,
+                    'results':results,'sources':sources,
+                    'used_tools':[r['tool'] for r in results],
+                    'needs_ai':True,'route':'function_call'}
     return prepare(db, request, user)
 
 
@@ -986,14 +1303,6 @@ def chat(db, request, user):
     sources = prepared['sources']
     used_tools = prepared['used_tools']
 
-    if not prepared['needs_ai']:
-        message = _data_only_answer(results)
-        _record_chat(db, request, user, message, 'direct', sources, used_tools, 'backend-direct')
-        return {
-            'answer': message, 'sources': sources, 'used_tools': used_tools,
-            'warning': WARNING, 'used_ai': False, 'route': 'direct',
-        }
-
     try:
         message, model_used = synthesize_chat(request, user, results)
         _record_chat(db, request, user, message, 'ok', sources, used_tools, model_used)
@@ -1010,7 +1319,7 @@ def chat(db, request, user):
     except (GeminiAPIError, ValueError, json.JSONDecodeError):
         reason, status = 'api', 'fallback_api'
 
-    message = _ai_unavailable_answer(results, reason)
+    message = 'An Tâm AI hiện chưa thể kết nối với dịch vụ AI. Vui lòng thử lại sau.'
     _record_chat(db, request, user, message, status, sources, used_tools, 'backend-fallback')
     return {
         'answer': message, 'sources': sources, 'used_tools': used_tools,
@@ -1018,13 +1327,30 @@ def chat(db, request, user):
     }
 
 
+def _response_focus(question):
+    q=plain(question)
+    if not _COMPLEX_REQUEST.search(q):
+        if re.search(r'(bao nhieu|co may|tong so).*?(sap het han|het han|ton thap|ton kho thap)',q):
+            return 'ONE_NUMBER_ALERT: Chỉ trả số đếm đúng đối tượng, mốc thời gian. Không kèm danh sách nếu chưa được yêu cầu.'
+        if re.search(r'(doanh thu|doanh so|tien ban|revenue)',q):
+            return 'ONE_NUMBER_REVENUE: Một câu trả lời, chỉ nêu doanh thu đúng kỳ; không thêm hóa đơn, bảng, thẻ hay đề xuất.'
+        if re.search(r'(hoa don|invoice).*(bao nhieu|so luong)|(?:bao nhieu|so luong|tong so).*hoa don',q):
+            return 'ONE_NUMBER_INVOICES: Chỉ nêu số hóa đơn đúng kỳ; không thêm doanh thu hoặc báo cáo.'
+        if re.search(r'(bao nhieu|tong so|dem so).*?(loai thuoc|nhom thuoc|don vi tinh|nha cung cap|lo thuoc|nhan vien|thuoc ke don|thuoc dang kinh doanh)',q):
+            return 'ONE_NUMBER_COUNT: Chỉ nêu số đếm được xác minh của đúng đối tượng được hỏi, một câu, không liệt kê thêm.'
+        if re.search(r'(con bao nhieu|ton kho|con may)',q):
+            return 'ONE_NUMBER_STOCK: Nếu một thuốc xác định, chỉ nêu số tồn của thuốc đó. Nếu chưa đủ dữ liệu hoặc đang có nhiều lô/đơn vị không thể gộp, nói rõ.'
+    return 'ANSWER_SCOPE: Chỉ trả lời nội dung được hỏi. Không liệt kê chỉ số/khuyến nghị khác trừ khi được yêu cầu.'
+
+
 def _stream_prompt(request, user, results):
     return (
         'ROLE: ' + user.role
-        + '\nHISTORY:\n' + _history_text(request.history)
+        + '\nANSWER_TARGET: ' + _response_focus(request.message)
+        + '\nHISTORY (for context only, not fresh facts):\n' + _history_text(request.history)
         + '\nQUESTION:\n' + request.message
         + '\n\nTOOL_RESULTS JSON:\n'
-        + json.dumps(results, ensure_ascii=False, default=str)[:60000]
+        + json.dumps(results, ensure_ascii=False, default=str)[:36000]
     )
 
 
@@ -1053,7 +1379,14 @@ def _gemini_stream_events(request, user, results):
     primary = settings.gemini_model
     models = _gemini_model_candidates(primary)[:3]
 
+    from time import monotonic
+    started=monotonic()
+    total_budget=max(8.0,float(settings.ai_gemini_failover_budget_seconds))
     for model_index, model in enumerate(models):
+        remaining=total_budget-(monotonic()-started)
+        if remaining<=1.0:
+            yield ('error','timeout_budget')
+            return
         url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse'
         payload = {
             'systemInstruction': {'parts': [{'text': CHAT_SYNTH_SYSTEM}]},
@@ -1062,7 +1395,11 @@ def _gemini_stream_events(request, user, results):
         }
         emitted = False
         try:
-            timeout = httpx.Timeout(connect=3.0, read=12.0, write=5.0, pool=3.0)
+            # Share the pre-first-token wait budget across fallback models.
+            # Once a response is streaming, avoid model switching mid-answer.
+            left=max(1,len(models)-model_index)
+            read_wait=min(float(settings.ai_stream_read_timeout_seconds), max(2.0,remaining/left))
+            timeout = httpx.Timeout(connect=3.0, read=read_wait, write=5.0, pool=3.0)
             with httpx.stream(
                 'POST',
                 url,
@@ -1073,13 +1410,17 @@ def _gemini_stream_events(request, user, results):
                 status = response.status_code
                 if status >= 400:
                     body = response.read().decode('utf-8', errors='replace')
-                    print(f'[AI] Gemini stream HTTP {status} ({model}): {body[:1200]}')
+                    print(f'[AI] Gemini stream HTTP {status} ({model})')
                     if status in (401, 403):
                         reason = 'auth'
                     elif status == 429:
                         reason = 'rate_limit'
                     else:
                         reason = 'api'
+                    # A bad API key fails for all Gemini models; switch provider now.
+                    if status in (401, 403):
+                        yield ('error', 'auth')
+                        return
                     # Fast failover: try the next configured model once.
                     if model_index + 1 < len(models):
                         print(f'[AI] Streaming model failover: {model} -> {models[model_index + 1]}')
@@ -1130,12 +1471,56 @@ def _gemini_stream_events(request, user, results):
     yield ('error', 'api')
 
 
+def _provider_stream_events(request, user, results):
+    """Gemini first; Groq models only if Gemini produced zero user text."""
+    emitted = False
+    failure = None
+    cancelled = getattr(request, '_cancelled', lambda: False)
+    for kind, value in _gemini_stream_events(request, user, results):
+        if cancelled():
+            return
+        if kind == 'delta':
+            emitted = True
+        if kind == 'error':
+            failure = value
+            break
+        yield (kind, value)
+    if emitted:
+        if failure:
+            yield ('error', failure)
+        return
+    if not settings.ai_enable_groq_fallback:
+        yield ('error', failure or 'unavailable')
+        return
+    from .llm_providers import groq_stream_events
+    for kind, value in groq_stream_events(CHAT_SYNTH_SYSTEM,
+                                         _stream_prompt(request, user, results), cancelled):
+        if cancelled():
+            return
+        if kind == 'delta':
+            emitted = True
+        if kind == 'error':
+            failure = value
+            break
+        yield kind, value
+    if not emitted:
+        yield 'error', failure or 'unavailable'
+
+
 def chat_stream(db, request, user):
     """NDJSON streaming response for the React chat UI."""
+    import logging
+    from time import monotonic
+    log=logging.getLogger(__name__)
+    started=monotonic()
     from .ai_presentation import presentation
     if getattr(request, 'agent', False):
         yield json.dumps({'type': 'activity', 'text': 'Đang xác định ngữ cảnh và tra cứu dữ liệu…'}, ensure_ascii=False) + '\n'
     prepared = _prepare_chat(db, request, user)
+    routed=monotonic()
+    log.info('AI route=%s preparation_ms=%d role=%s',
+             'fast' if prepared.get('fast') else prepared.get('route') or 'advanced',
+             round((routed-started)*1000),user.role)
     if getattr(request, '_cancelled', lambda: False)():
         return
 
@@ -1159,18 +1544,7 @@ def chat_stream(db, request, user):
     results = prepared['results']
     sources = prepared['sources']
     used_tools = prepared['used_tools']
-    trusted_ui = presentation(results, user.role)
-
-    if not prepared['needs_ai']:
-        message = _data_only_answer(results)
-        _record_chat(db, request, user, message, 'direct', sources, used_tools, 'backend-direct')
-        yield packet({
-            'type': 'meta', 'route': 'direct', 'used_ai': False,
-            'sources': sources, 'used_tools': used_tools, 'presentation': trusted_ui,
-        })
-        yield packet({'type': 'delta', 'text': message})
-        yield packet({'type': 'done', 'status': 'direct', 'model': 'backend-direct'})
-        return
+    trusted_ui = presentation(results, user.role, request.message)
 
     # Tell the UI which internal data was selected before waiting for the model.
     yield packet({
@@ -1181,48 +1555,39 @@ def chat_stream(db, request, user):
     full_text = ''
     model_used = settings.gemini_model
     failure_reason = None
-    for kind, value in _gemini_stream_events(request, user, results):
+    first_token=None
+    for kind, value in _provider_stream_events(request, user, results):
         if kind == 'model':
             model_used = value
             yield packet({'type': 'model', 'model': model_used})
         elif kind == 'delta':
+            if first_token is None:
+                first_token=monotonic()
+                log.info('AI first_token_ms=%d model=%s',round((first_token-started)*1000),model_used)
             full_text += value
             yield packet({'type': 'delta', 'text': value})
         elif kind == 'error':
             failure_reason = value
             break
 
+    log.info('AI completed_ms=%d status=%s',round((monotonic()-started)*1000),
+             'ok' if not failure_reason and full_text.strip() else 'error')
     if not failure_reason and full_text.strip():
         _record_chat(db, request, user, full_text, 'ok', sources, used_tools, model_used)
         yield packet({'type': 'done', 'status': 'ok', 'model': model_used, 'used_ai': True})
         return
 
-    # If the stream failed before producing text, show an explicit data-only
-    # fallback. If it failed mid-stream, keep the partial AI answer and append a
-    # transparent interruption notice instead of silently replacing it.
+    # A broken model must never be impersonated by a backend SQL response.
     if full_text.strip():
-        suffix = (
-            '\n\n---\nAI bị gián đoạn trong lúc trả lời. '
-            + _fallback_reason_text(failure_reason or 'stream_interrupted')
-        )
-        message = full_text + suffix
-        yield packet({'type': 'delta', 'text': suffix})
-        status = 'fallback_stream'
-        model_for_log = model_used
+        message = full_text + '\n\n(Phản hồi AI bị gián đoạn. Vui lòng thử lại.)'
+        yield packet({'type':'delta', 'text':'\n\n(Phản hồi AI bị gián đoạn. Vui lòng thử lại.)'})
+        status, model_for_log = 'interrupted', model_used
     else:
-        message = _ai_unavailable_answer(results, failure_reason or 'api')
-        yield packet({'type': 'delta', 'text': message})
-        status_map = {
-            'auth': 'fallback_auth',
-            'rate_limit': 'fallback_rate_limit',
-            'network': 'fallback_network',
-            'not_configured': 'fallback_not_configured',
-            'empty': 'fallback_empty',
-            'stream_interrupted': 'fallback_stream',
-            'api': 'fallback_api',
-        }
-        status = status_map.get(failure_reason or 'api', 'fallback_api')
-        model_for_log = 'backend-fallback'
+        message = 'An Tâm AI hiện chưa thể kết nối với dịch vụ AI. Vui lòng thử lại sau.'
+        yield packet({'type':'meta', 'route':'unavailable', 'used_ai':False,
+                      'sources':[], 'used_tools':[], 'presentation':None})
+        yield packet({'type':'delta', 'text':message})
+        status, model_for_log = 'interrupted', 'unavailable'
 
     _record_chat(db, request, user, message, status, sources, used_tools, model_for_log)
     yield packet({

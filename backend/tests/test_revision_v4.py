@@ -38,7 +38,7 @@ def test_session_without_conversation_id_does_not_store_history(setup,monkeypatc
     assert response.status_code==200
     events=[json.loads(line) for line in response.text.splitlines()]
     assert not any(x['type']=='title' for x in events)
-    assert 'không khả dụng' in ''.join(x.get('text','') for x in events)
+    assert 'chưa thể kết nối' in ''.join(x.get('text','') for x in events)
     with S() as db:
         for model in [AIMessage,AIConversation]:assert db.scalar(select(func.count()).select_from(model))==0
     assert c.get('/api/ai/conversations').status_code==200

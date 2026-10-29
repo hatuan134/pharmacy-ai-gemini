@@ -13,12 +13,14 @@ from sqlalchemy import select
 from . import models as m
 
 TABLES = {
- 'medicines': (m.Medicine, 'id code name category_id unit_id min_stock prescription_required active'),
+ 'medicines': (m.Medicine, 'id code name category_id unit_id min_stock prescription_required active information source'),
  'categories': (m.Category, 'id name'), 'units': (m.Unit, 'id name'),
- 'suppliers': (m.Supplier, 'id name active'),
+ 'suppliers': (m.Supplier, 'id name phone address active'),
  'batches': (m.Batch, 'id medicine_id supplier_id code received_date expiry_date quantity purchase_price sale_price'),
- 'invoices': (m.Invoice, 'id user_id created_at total status payment_method'),
- 'invoice_items': (m.InvoiceItem, 'id invoice_id batch_id medicine_name quantity sale_price purchase_price'),
+ 'invoices': (m.Invoice, 'id user_id customer created_at total status payment_method prescription_ref cancel_reason'),
+ 'invoice_items': (m.InvoiceItem, 'id invoice_id batch_id medicine_name unit_name quantity sale_price purchase_price'),
+ 'users': (m.User, 'id username name role active'),
+ 'movements': (m.Movement, 'id batch_id user_id invoice_id delta balance kind reason created_at'),
 }
 
 ROLE_SCHEMA = {
@@ -31,6 +33,7 @@ ROLE_SCHEMA = {
         'units': TABLES['units'][1].split(),
         'suppliers': TABLES['suppliers'][1].split(),
         'batches': TABLES['batches'][1].split(),
+        'movements': TABLES['movements'][1].split(),
     },
     # Thu ngân không được cấp dynamic_query; schema này vẫn thu hẹp để tạo lớp
     # bảo vệ thứ hai nếu hàm bị gọi trực tiếp trong tương lai.

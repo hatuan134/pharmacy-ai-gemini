@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
+// Maintained against the current Hybrid Gemini/Groq chatbot; filename kept for patch compatibility.
 import React from 'react';
+import {readFileSync} from 'node:fs';
 import {it,expect,vi,beforeEach,afterEach} from 'vitest';
 import {render,screen,waitFor,fireEvent,cleanup} from '@testing-library/react';
 import AIChat from './AIChat';
@@ -111,7 +113,7 @@ it('never offers a management report link to a cashier',async()=>{
 });
 
 
-it('does not display chart or copy/regenerate actions in streamed answers', async()=>{
+it('does not show an unsolicited chart or removed toolbar actions in streamed answers', async()=>{
   const chart={title:'Tồn khả dụng một số thuốc',unit:'',bars:[{label:'Thuốc A',value:9}]};
   const presentation={cards:[],table:null,chart,actions:[{page:'batches',label:'Xem chi tiết tồn kho'}]};
   streamApi.mockImplementation(async (_url,_options,onPacket)=>{
@@ -133,7 +135,7 @@ it('does not display chart or copy/regenerate actions in streamed answers', asyn
 });
 
 
-it('does not show a saved V5 chart after reopening conversation',async()=>{
+it('does not resurrect a legacy chart or removed toolbar actions from history',async()=>{
   const c={id:7,title:'Tồn kho',updated_at:'2026-10-28T08:00:00Z'};
   api.mockImplementation(async(path)=>path==='/ai/conversations'?[c]:{id:7,messages:[{id:99,role:'assistant',content:'Đã tra cứu 9 đơn vị.',presentation:{cards:[],table:null,chart:{title:'Biểu đồ cũ',bars:[{label:'A',value:9}]},actions:[]}}]});
   render(<AIChat user={manager} MarkdownMessage={Mark} page='batches'/>);
@@ -147,4 +149,16 @@ it('does not show a saved V5 chart after reopening conversation',async()=>{
   expect(screen.queryByText('Biểu đồ cũ')).toBeNull();
   expect(screen.queryByText('Sao chép')).toBeNull();
   expect(screen.queryByText('Tạo lại')).toBeNull();
+});
+
+
+it('the current composer CSS keeps one inset scrollbar without native arrow buttons',()=>{
+  const css=readFileSync(new URL('./style.css',import.meta.url),'utf8');
+  const start=css.indexOf('/* Chat composer: one rounded container');
+  expect(start).toBeGreaterThan(-1);
+  const latest=css.slice(start);
+  expect(latest).toMatch(/\.assistant-composer-shell/);
+  expect(latest).toMatch(/overflow:\s*hidden/);
+  expect(latest).toMatch(/overflow-y:\s*auto/);
+  expect(css).toMatch(/textarea::-webkit-scrollbar-button[\s\S]*?display:\s*none\s*!important/);
 });

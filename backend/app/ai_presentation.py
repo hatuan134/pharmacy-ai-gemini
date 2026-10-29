@@ -7,24 +7,32 @@ from decimal import Decimal, InvalidOperation
 
 # Routes are client-side identifiers, never URLs supplied by the model.
 ROLE_PAGES = {
-    'manager': {'dashboard', 'pos', 'medicines', 'batches', 'invoices', 'alerts', 'suppliers', 'reports'},
-    'pharmacist': {'dashboard', 'pos', 'medicines', 'batches', 'invoices', 'alerts'},
-    'cashier': {'dashboard', 'pos', 'medicines', 'invoices'},
+    'manager': {'dashboard', 'pos', 'medicines', 'batches', 'invoices', 'alerts', 'suppliers', 'reports', 'users', 'settings'},
+    'pharmacist': {'dashboard', 'pos', 'medicines', 'batches', 'invoices', 'alerts', 'settings'},
+    'cashier': {'dashboard', 'pos', 'medicines', 'invoices', 'settings'},
 }
 
 ROLE_TOOLS = {
-    'manager': {'medicine_search','inventory_search','expiry_alerts','low_stock','stock_risk','sales_summary','system_data','dynamic_query'},
-    'pharmacist': {'medicine_search','inventory_search','expiry_alerts','low_stock','stock_risk','system_data','dynamic_query'},
-    'cashier': {'medicine_search','inventory_search','expiry_alerts','low_stock','system_data'},
+    'manager': {'medicine_search','inventory_search','expiry_alerts','low_stock','stock_risk','sales_summary','system_data','overview_counts','stock_balance','alert_counts','dashboard_view','report_view','medicine_catalog','invoice_records','batch_records','movement_records','supplier_records','staff_records','dynamic_query'},
+    'pharmacist': {'medicine_search','inventory_search','expiry_alerts','low_stock','stock_risk','system_data','overview_counts','stock_balance','alert_counts','dashboard_view','medicine_catalog','invoice_records','batch_records','movement_records','supplier_records','dynamic_query'},
+    'cashier': {'medicine_search','inventory_search','expiry_alerts','low_stock','system_data','overview_counts','stock_balance','alert_counts','dashboard_view','medicine_catalog','invoice_records'},
 }
 
 TOOLS_TO_DESTINATIONS = {
     'medicine_search': ('medicines', 'Xem danh mục thuốc'),
+    'medicine_catalog': ('medicines', 'Xem danh mục thuốc'),
     'inventory_search': ('batches', 'Xem lô và tồn kho'),
     'expiry_alerts': ('alerts', 'Xem cảnh báo hạn dùng'),
     'low_stock': ('alerts', 'Xem thuốc tồn kho thấp'),
     'stock_risk': ('batches', 'Xem chi tiết tồn kho'),
     'sales_summary': ('reports', 'Mở báo cáo doanh thu'),
+    'report_view': ('reports', 'Mở Báo cáo hoạt động'),
+    'dashboard_view': ('dashboard', 'Xem Tổng quan'),
+    'invoice_records': ('invoices', 'Xem hóa đơn'),
+    'batch_records': ('batches', 'Xem lô và tồn kho'),
+    'movement_records': ('batches', 'Xem lịch sử biến động kho'),
+    'supplier_records': ('suppliers', 'Xem nhà cung cấp'),
+    'staff_records': ('users', 'Xem phân quyền'),
 }
 
 
@@ -78,13 +86,23 @@ def _get_actions(results, role):
     return actions[:3]
 
 
-def presentation(results, role):
+def presentation(results, role, question=""):
     """Return display-only data already filtered by each server-side tool's RBAC."""
     trusted = [(r.get('tool'), r.get('data')) for r in results if isinstance(r, dict) and not r.get('error') and r.get('tool') in ROLE_TOOLS.get(role, set())]
     # Keep chart=None for backward compatibility with persisted V5 chat metadata.
     ui = {'cards': [], 'table': None, 'chart': None, 'actions': _get_actions(trusted, role)}
     for tool, data in trusted:
-        if tool == 'sales_summary' and role == 'manager' and isinstance(data, dict):
+        if tool == 'medicine_catalog' and isinstance(data,dict):
+            catalog=data.get('rows')
+            if isinstance(catalog,list) and catalog and ui['table'] is None:
+                ui['table']=_table('Danh mục thuốc', [('code','Mã'),('name','Thuốc'),('category','Nhóm'),('unit','Đơn vị'),('min_stock','Tồn tối thiểu')],catalog)
+                ui['table']['has_more']=bool(data.get('truncated')) or ui['table']['has_more']
+        elif tool == 'report_view' and role == 'manager' and isinstance(data,dict):
+            if isinstance(data.get('top_medicines'),list) and data['top_medicines'] and ui['table'] is None:
+                ui['table'] = _table('Thuốc bán chạy', [('name','Thuốc'),('quantity','Đã bán'),('unit','Đơn vị'),('revenue','Doanh thu')],data['top_medicines'])
+            elif isinstance(data.get('daily_revenue'),list) and data['daily_revenue'] and ui['table'] is None:
+                ui['table'] = _table('Doanh thu theo ngày', [('date','Ngày'),('revenue','Doanh thu')],data['daily_revenue'],limit=30)
+        elif tool == 'sales_summary' and role == 'manager' and isinstance(data, dict):
             revenue = _num(data.get('revenue'))
             invoices = data.get('invoice_count')
             if revenue is not None:
@@ -119,6 +137,26 @@ def presentation(results, role):
                         ui['table'] = _table(title, headers, group['rows'])
                         ui['table']['has_more'] = bool(group.get('truncated')) or ui['table']['has_more']
                         break
+        elif tool in {'invoice_records','batch_records','movement_records','supplier_records','staff_records'} and isinstance(data, dict):
+            rows = data.get('records')
+            from .ai import plain
+            import re
+            wants_table = (not question or bool(re.search(
+                r'danh sach|liet ke|chi tiet|lich su|nhung |cac |theo tung|gom (nhung|cac|thuoc)',
+                plain(question))))
+            # A single phone number, one price, one date etc. should be a
+            # concise language answer, not an unrequested four-column table.
+            if wants_table and isinstance(rows,list) and rows and ui['table'] is None:
+                formats={
+                    'invoice_records': ('Hóa đơn', [('id','Mã hóa đơn'),('customer','Khách hàng'),('total','Tổng tiền'),('status','Trạng thái')]),
+                    'batch_records': ('Lô nhập & tồn kho', [('medicine_name','Thuốc'),('batch','Số lô'),('received_date','Ngày nhập'),('quantity','Tồn')]),
+                    'movement_records': ('Lịch sử biến động kho', [('created_at','Ngày'),('batch','Số lô'),('kind','Nghiệp vụ'),('delta','Thay đổi'),('balance','Tồn sau')]),
+                    'supplier_records': ('Nhà cung cấp', [('name','Tên'),('phone','Điện thoại'),('active','Trạng thái')]),
+                    'staff_records': ('Phân quyền', [('name','Họ tên'),('username','Tên đăng nhập'),('role','Vai trò'),('active','Hoạt động')]),
+                }
+                title,headers=formats[tool]
+                ui['table']=_table(title,headers,rows)
+                ui['table']['has_more']=bool(data.get('truncated')) or ui['table']['has_more']
         elif tool == 'dynamic_query' and isinstance(data, dict):
             rows = data.get('rows')
             if ui['table'] is None and isinstance(rows, list) and rows and isinstance(rows[0], dict):
@@ -127,5 +165,17 @@ def presentation(results, role):
                 if headers:
                     ui['table'] = _table('Kết quả tra cứu', headers, rows)
                     ui['table']['has_more'] = bool(data.get('truncated')) or ui['table']['has_more']
-    # Returning only whitelisted navigation/actions and capped verified data.
+    # Presentation obeys user intent, not merely which tools happened to run.
+    # A precise one-number request must never acquire unrelated KPI cards/tables.
+    from .ai import plain, _COMPLEX_REQUEST
+    import re
+    q = plain(question or '')
+    if question and not _COMPLEX_REQUEST.search(q) and not re.search(r'do thi|bieu do|chi tiet|danh sach',q):
+        if any(tool=='medicine_catalog' for tool,_ in trusted) and re.search(r'bao nhieu|tong so|dem so|co may',q):
+            return {'cards':[], 'table':None, 'chart':None, 'actions':[]}
+        one_number = bool(re.search(r'doanh thu|doanh so|tien ban|revenue',q)
+                          or re.search(r'(bao nhieu|so luong|tong so).*hoa don|hoa don.*(bao nhieu|so luong)',q)
+                          or re.search(r'(con bao nhieu|con may|so luong ton).*thuoc|thuoc.*(con bao nhieu|con may|so luong ton)',q))
+        if one_number or any(tool in ('overview_counts','stock_balance','alert_counts') for tool, _ in trusted):
+            return {'cards':[], 'table':None, 'chart':None, 'actions':[]}
     return ui

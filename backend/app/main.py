@@ -292,21 +292,30 @@ def alert_list(days: int = Query(90, ge=1, le=365), user=Depends(current_user), 
     return alerts(db, days)
 
 
+def _public_invoice(detail, user):
+    # Return only display fields, without backend idempotency fingerprints.
+    result = {k:v for k,v in detail.items() if k not in ('request_key','request_hash')}
+    if 'items' in result and user.role != 'manager':
+        result['items'] = [{k:v for k,v in line.items() if k!='purchase_price'}
+                           for line in result['items']]
+    return result
+
+
 @app.post('/api/invoices')
 def sale(data: Sale, user=Depends(current_user), db=Depends(get_db)):
-    return create_sale(db, data, user)
+    return _public_invoice(create_sale(db, data, user), user)
 
 
 @app.get('/api/invoices')
 def invoices(user=Depends(current_user), db=Depends(get_db)):
     stmt = select(Invoice).order_by(Invoice.id.desc()).limit(1000)
-    return [row(i) for i in db.scalars(stmt)]
+    return [_public_invoice(row(i), user) for i in db.scalars(stmt)]
 
 
 @app.get('/api/invoices/{ident}')
 def invoice(ident: int, user=Depends(current_user), db=Depends(get_db)):
     item = require(db, Invoice, ident)
-    return invoice_detail(db, item)
+    return _public_invoice(invoice_detail(db, item), user)
 
 
 @app.post('/api/invoices/{ident}/cancel')

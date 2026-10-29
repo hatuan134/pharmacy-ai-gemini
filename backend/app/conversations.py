@@ -75,6 +75,7 @@ def stream(request_id: UUID, data: AIChatRequest, user=Depends(ai_user), db=Depe
                 _running.pop(key, None)
             raise
 
+    # AI chooses a fast factual path or the bounded advanced agent per question.
     data.agent = True
     data._cancelled = event.is_set
 
@@ -84,14 +85,18 @@ def stream(request_id: UUID, data: AIChatRequest, user=Depends(ai_user), db=Depe
     assistant_id = assistant.id if assistant is not None else None
 
     def packets():
+        from time import monotonic
         stream_db = Session(bind=bind, expire_on_commit=False)
         gen = None
         content = []
+        content_chars = 0
         metadata = {'sources': [], 'tools': [], 'route': 'direct', 'model': '', 'presentation': None}
         status = 'interrupted'
         finalized = False
+        last_saved_at = 0.0
+        last_saved_chars = 0
         def persist(final=False):
-            nonlocal finalized
+            nonlocal finalized, last_saved_at, last_saved_chars
             if assistant_id is None:
                 return
             stream_db.execute(update(AIMessage).where(AIMessage.id == assistant_id).values(
@@ -103,6 +108,8 @@ def stream(request_id: UUID, data: AIChatRequest, user=Depends(ai_user), db=Depe
             stream_db.execute(update(AIConversation).where(
                 AIConversation.id == conversation_id).values(**values))
             stream_db.commit()
+            last_saved_at = monotonic()
+            last_saved_chars = content_chars
             finalized = final
 
         try:
@@ -121,7 +128,9 @@ def stream(request_id: UUID, data: AIChatRequest, user=Depends(ai_user), db=Depe
                     yield raw
                     continue
                 if packet.get('type') == 'delta':
-                    content.append(str(packet.get('text') or ''))
+                    chunk = str(packet.get('text') or '')
+                    content.append(chunk)
+                    content_chars += len(chunk)
                 elif packet.get('type') == 'meta':
                     metadata.update(sources=packet.get('sources') or [], tools=packet.get('used_tools') or [],
                                     route=packet.get('route') or 'direct', presentation=packet.get('presentation'))
@@ -132,10 +141,16 @@ def stream(request_id: UUID, data: AIChatRequest, user=Depends(ai_user), db=Depe
                     metadata['model'] = packet.get('model') or metadata['model']
                 elif packet.get('type') == 'error':
                     status = 'interrupted'
-                # Persist before delivery, including structured results and terminal status.
-                # A dropped connection must not erase content already shown to the user.
-                if packet.get('type') in ('delta', 'meta', 'model', 'done', 'error'):
-                    persist(final=packet.get('type') == 'done')
+                # Save first chunk and metadata immediately. Batch later tiny
+                # deltas; finalization persists remaining text even on disconnect.
+                # This avoids one PostgreSQL commit per streamed token.
+                kind = packet.get('type')
+                if kind in ('meta', 'model', 'done', 'error'):
+                    persist(final=kind == 'done')
+                elif kind == 'delta':
+                    pending_chars = content_chars - last_saved_chars
+                    if last_saved_chars == 0 or pending_chars >= 512 or monotonic() - last_saved_at >= 0.6:
+                        persist()
                 yield raw
                 if packet.get('type') == 'done':
                     break

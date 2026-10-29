@@ -9,7 +9,13 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.5-flash-lite"
     # Comma-separated stable alternatives used only when the primary model is
     # rate-limited/unavailable. Keep configurable from Render Environment.
-    gemini_fallback_models: str = "gemini-3.1-flash-lite,gemini-2.5-flash-lite"
+    gemini_fallback_models: str = "gemini-3.1-flash-lite"
+    # Optional secondary provider. Never sent to the frontend.
+    groq_api_key: str | None = None
+    groq_models: str = "openai/gpt-oss-120b,qwen/qwen3.8-27b,openai/gpt-oss-20b"
+    ai_enable_groq_fallback: bool = True
+    ai_stream_read_timeout_seconds: float = 15.0
+    ai_gemini_failover_budget_seconds: float = 20.0
     # Number of attempts for the primary model (initial call included).
     gemini_retry_attempts: int = 1
     gemini_retry_base_seconds: float = 0.8

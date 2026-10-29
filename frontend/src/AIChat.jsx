@@ -194,7 +194,7 @@ export default function AIChat({user,MarkdownMessage,page,onNavigate}){
             </div></div>)}<div ref={end}/>
           </div>
           {error&&<div className="error assistant-error" role="alert">{error}</div>}
-          <form className="chat-composer" onSubmit={ask}><label className="assistant-input-box"><span className="sr-only">Nội dung tin nhắn</span><textarea rows={1} maxLength={2000} placeholder="Nhắn tin cho An Tâm AI…" value={question} onChange={e=>setQuestion(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();ask(e)}}}/></label>{busy?<button type="button" className="stop-button" onClick={stop} aria-label="Dừng trả lời"><Square size={16}/>Dừng</button>:<button className="send-button" type="submit" disabled={loading||!question.trim()} aria-label="Gửi" title="Gửi tin nhắn"><Send size={20}/></button>}</form>
+          <form className="chat-composer" onSubmit={ask}><div className="assistant-composer-shell"><label className="assistant-input-box"><span className="sr-only">Nội dung tin nhắn</span><textarea rows={1} maxLength={2000} placeholder="Nhắn tin cho An Tâm AI…" value={question} onChange={e=>setQuestion(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();ask(e)}}}/></label>{busy?<button type="button" className="stop-button" onClick={stop} aria-label="Dừng trả lời"><Square size={16}/>Dừng</button>:<button className="send-button" type="submit" disabled={loading||!question.trim()} aria-label="Gửi" title="Gửi tin nhắn"><Send size={20}/></button>}</div></form>
           <div className="chat-disclaimer">AI cung cấp thông tin tham khảo; không thay thế tư vấn của dược sĩ hoặc bác sĩ.</div>
         </div>
       </div>

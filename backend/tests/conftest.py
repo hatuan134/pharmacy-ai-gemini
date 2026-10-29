@@ -1,7 +1,10 @@
 import os
-os.environ.setdefault('SECRET_KEY', 'test-secret-only-never-use-in-production-123456')
-os.environ.setdefault('DATABASE_URL', 'sqlite:///:memory:')
+# Tests must never connect to the user's production/local PostgreSQL database
+# or make paid Gemini/Groq requests, even if their real .env is configured.
+os.environ['SECRET_KEY'] = 'test-secret-only-never-use-in-production-123456'
+os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
 os.environ['GEMINI_API_KEY'] = ''
+os.environ['GROQ_API_KEY'] = ''
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

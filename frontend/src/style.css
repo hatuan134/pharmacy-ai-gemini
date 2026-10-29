@@ -1002,3 +1002,152 @@ tbody tr:hover{background:#f6fbfa}
 .cart-lot-detail { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: #617683; }
 .cart-lot-detail span:last-child { text-align: right; white-space: nowrap; }
 @media (max-width: 480px) { .cart-lot-detail { flex-wrap: wrap; } }
+
+/* An Tam AI - compact scrollbar without up/down arrow buttons (2026-10-30) */
+/* Scoped to the chat composer: do not change page, modal or message scrollbars. */
+.assistant-chat .assistant-input-box textarea,
+.assistant-floating .assistant-chat .assistant-input-box textarea {
+  resize: none;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+.assistant-chat .assistant-input-box textarea::-webkit-scrollbar,
+.assistant-floating .assistant-chat .assistant-input-box textarea::-webkit-scrollbar {
+  width: 5px;
+}
+.assistant-chat .assistant-input-box textarea::-webkit-scrollbar-track,
+.assistant-floating .assistant-chat .assistant-input-box textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+.assistant-chat .assistant-input-box textarea::-webkit-scrollbar-thumb,
+.assistant-floating .assistant-chat .assistant-input-box textarea::-webkit-scrollbar-thumb {
+  background: #b6c9c8;
+  border-radius: 999px;
+}
+.assistant-chat .assistant-input-box textarea::-webkit-scrollbar-thumb:hover,
+.assistant-floating .assistant-chat .assistant-input-box textarea::-webkit-scrollbar-thumb:hover {
+  background: #8baaa7;
+}
+/* Hide both native Windows/Chromium arrow buttons; retain the scroll thumb. */
+.assistant-chat .assistant-input-box textarea::-webkit-scrollbar-button,
+.assistant-floating .assistant-chat .assistant-input-box textarea::-webkit-scrollbar-button,
+.assistant-chat .assistant-input-box textarea::-webkit-scrollbar-button:single-button,
+.assistant-floating .assistant-chat .assistant-input-box textarea::-webkit-scrollbar-button:single-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+/* Firefox exposes native scrollbars differently: request its compact variant. */
+@supports (-moz-appearance: none) {
+  .assistant-chat .assistant-input-box textarea,
+  .assistant-floating .assistant-chat .assistant-input-box textarea {
+    scrollbar-width: thin;
+    scrollbar-color: #b6c9c8 transparent;
+  }
+}
+
+
+/* Chat composer: one rounded container for input + send button.
+   The textarea and scrollbar remain inset so the thumb cannot escape the border. */
+.assistant-chat .chat-composer,
+.assistant-floating .assistant-chat .chat-composer {
+  display: block;
+  padding: 10px 13px 8px;
+  margin: 0;
+  background: #fff;
+}
+.assistant-chat .chat-composer .assistant-composer-shell,
+.assistant-floating .assistant-chat .chat-composer .assistant-composer-shell {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 60px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px 6px 13px;
+  border: 1px solid #cbdadf;
+  border-radius: 17px;
+  background: #fff;
+  overflow: hidden;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.assistant-chat .assistant-composer-shell:focus-within {
+  border-color: #0f9784;
+  box-shadow: 0 0 0 2px rgba(15,151,132,.12);
+}
+.assistant-chat .assistant-composer-shell .assistant-input-box,
+.assistant-floating .assistant-chat .assistant-composer-shell .assistant-input-box {
+  display: flex;
+  align-self: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 5px 0 0;
+  margin: 0;
+  overflow: hidden;
+}
+.assistant-chat .assistant-composer-shell .assistant-input-box textarea,
+.assistant-floating .assistant-chat .assistant-composer-shell .assistant-input-box textarea {
+  box-sizing: border-box;
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: 46px;
+  min-height: 46px;
+  max-height: 46px;
+  padding: 10px 5px 9px 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  font-size: 13px;
+  line-height: 22px;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #b6c9c8 transparent;
+}
+.assistant-chat .assistant-composer-shell .assistant-input-box textarea:focus,
+.assistant-chat .assistant-composer-shell .assistant-input-box textarea:focus-visible {
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+.assistant-chat .assistant-composer-shell .send-button,
+.assistant-floating .assistant-chat .assistant-composer-shell .send-button {
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  max-height: 44px;
+  padding: 0;
+  margin: 0;
+  align-self: center;
+  border-radius: 12px;
+  box-shadow: none;
+}
+.assistant-chat .assistant-composer-shell .stop-button,
+.assistant-floating .assistant-chat .assistant-composer-shell .stop-button {
+  flex: 0 0 auto;
+  height: 44px;
+  min-height: 44px;
+  max-height: 44px;
+  align-self: center;
+  margin: 0;
+  padding: 0 10px;
+  border-radius: 12px;
+}
+@media (max-width: 480px) {
+  .assistant-chat .chat-composer,
+  .assistant-floating .assistant-chat .chat-composer { padding: 9px 10px 7px; }
+  .assistant-chat .chat-composer .assistant-composer-shell,
+  .assistant-floating .assistant-chat .chat-composer .assistant-composer-shell {
+    gap: 5px;
+    padding: 5px 6px 5px 10px;
+  }
+}

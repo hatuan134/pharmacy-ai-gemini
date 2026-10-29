@@ -258,3 +258,72 @@ it('POS rejects overstock and clears stale alert when item removed',async()=>{
   fireEvent.click(screen.getByRole('button',{name:'Bỏ Thuốc kiểm thử A khỏi giỏ'}));
   expect(screen.queryByText(/chỉ còn 10 Hộp khả dụng/)).toBeNull();
 });
+
+
+// Regression coverage for the latest role tables and STT (sequential numbers)
+// introduced after the original V5 frontend tests.
+it('STT stays aligned and continues across pages of the medicine-group and unit tables',async()=>{
+  const groups=Array.from({length:12},(_,i)=>({id:i+1,name:`Nhóm ${i+1}`}));
+  const units=Array.from({length:12},(_,i)=>({id:i+1,name:`Đơn vị ${i+1}`}));
+  api.mockImplementation(path=>Promise.resolve(path==='/categories'?groups:path==='/units'?units:data[path.split('?')[0]]??[]));
+  render(<SettingsPage user={user}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Danh mục'}));
+  for(const [sectionName,first,second] of [['Nhóm thuốc','Nhóm 1','Nhóm 11'],['Đơn vị tính','Đơn vị 1','Đơn vị 11']]){
+    const region=screen.getByRole('region',{name:sectionName});
+    const table=within(region).getByRole('table');
+    expect(within(table).getByRole('columnheader',{name:'STT'})).toBeTruthy();
+    await within(table).findByText(first);
+    expect(within(table).getAllByRole('row')[1].cells[0].textContent).toBe('1');
+    fireEvent.click(within(region).getByRole('button',{name:'Trang 2'}));
+    expect(within(table).getAllByRole('row')[1].cells[0].textContent).toBe('11');
+    expect(within(table).getByText(second)).toBeTruthy();
+  }
+});
+
+it('STT is the leftmost column on supplier, batch and staff lists',async()=>{
+  const cases=[
+    [<Catalog type="suppliers" user={user}/>, 'NCC'],
+    [<Batches user={user}/>, 'LOT-001'],
+    [<Staff user={user}/>, 'Quản lý kiểm thử'],
+  ];
+  for(const [element,record] of cases){
+    const view=render(element);
+    await screen.findByText(record);
+    const table=screen.getByRole('table');
+    expect(within(table).getAllByRole('columnheader')[0].textContent).toBe('STT');
+    expect(within(table).getAllByRole('row')[1].cells[0].textContent).toBe('1');
+    view.unmount();
+  }
+});
+
+it('AI composer keeps its send button in the same shell as its single textarea',async()=>{
+  renderChat();
+  const input=screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…');
+  const shell=input.closest('.assistant-composer-shell');
+  expect(shell).toBeTruthy();
+  expect(shell.querySelectorAll('textarea')).toHaveLength(1);
+  expect(shell.querySelectorAll('button.send-button')).toHaveLength(1);
+  expect(shell.contains(screen.getByRole('button',{name:'Gửi'}))).toBe(true);
+  expect(input.getAttribute('rows')).toBe('1');
+  expect(input.getAttribute('maxlength')).toBe('2000');
+  expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(true);
+  fireEvent.change(input,{target:{value:'   '}});
+  expect(screen.getByRole('button',{name:'Gửi'}).disabled).toBe(true);
+});
+
+it('AI composer sends on Enter, not Shift+Enter, preserving the current chatbot UX',async()=>{
+  renderChat();
+  const input=screen.getByPlaceholderText('Nhắn tin cho An Tâm AI…');
+  streamApi.mockImplementation(async(_url,_options,onPacket)=>{
+    onPacket({type:'message',id:2});
+    onPacket({type:'delta',text:'Đã tra cứu dữ liệu theo quyền.'});
+    onPacket({type:'done',status:'ok'});
+  });
+  fireEvent.change(input,{target:{value:'Tồn kho hôm nay có gì?'}});
+  fireEvent.keyDown(input,{key:'Enter',code:'Enter',shiftKey:true});
+  expect(streamApi).not.toHaveBeenCalled();
+  fireEvent.keyDown(input,{key:'Enter',code:'Enter',shiftKey:false});
+  await waitFor(()=>expect(streamApi).toHaveBeenCalledTimes(1));
+  await screen.findByText('Đã tra cứu dữ liệu theo quyền.');
+  expect(input.value).toBe('');
+});

@@ -45,7 +45,7 @@ def test_gemini_retries_primary_then_switches_model(monkeypatch):
     assert data['_app_model_used'] == 'gemini-3.8-flash'
 
 
-def test_fallback_is_explicitly_data_only_not_fake_ai_analysis():
+def test_all_providers_unavailable_never_outputs_database_result():
     results = [
         {
             'tool': 'expiry_alerts',
@@ -82,13 +82,9 @@ def test_fallback_is_explicitly_data_only_not_fake_ai_analysis():
 
     answer = ai._fallback_chat_answer(results)
 
-    assert 'AI tạm thời không khả dụng' in answer
-    assert 'Phần phân tích/tổng hợp bằng AI chưa được thực hiện' in answer
-    assert 'Paracetamol 500mg' in answer
-    assert 'Quy trình nội bộ đã truy xuất' not in answer
-    assert 'Đề xuất:' not in answer
-    assert 'FEFO' not in answer
-    assert 'expiry_alerts:' not in answer
+    assert answer == 'An Tâm AI hiện chưa thể kết nối với dịch vụ AI. Vui lòng thử lại sau.'
+    assert 'Paracetamol' not in answer
+
 
 
 def test_backend_router_keeps_simple_lookup_direct_and_analysis_for_ai():
@@ -108,21 +104,21 @@ def test_external_lookup_is_detected_and_not_routed_to_public_tools():
 
 
 def test_stream_direct_lookup_does_not_require_gemini(setup, monkeypatch):
+    # New requirement: never expose raw data just because both providers failed.
     c, S, ids, tokens = setup
     monkeypatch.setattr(settings, 'gemini_api_key', '')
+    monkeypatch.setattr(settings, 'groq_api_key', '')
     c.cookies.set('session', tokens['manager'])
-
     response = c.post('/api/ai/chat/stream', json={
-        'message': 'Doanh thu tháng này là bao nhiêu?',
-        'history': [],
+        'message': 'Doanh thu tháng này là bao nhiêu?', 'history': [],
     })
     assert response.status_code == 200
     events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
-    assert events[0]['type'] == 'meta'
-    assert events[0]['route'] == 'direct'
-    assert events[0]['used_ai'] is False
-    assert any(e.get('type') == 'delta' and 'doanh thu' in e.get('text', '').lower() for e in events)
-    assert events[-1]['status'] == 'direct'
+    assert events[0]['route'] == 'ai'
+    answer = ''.join(e.get('text','') for e in events if e.get('type') == 'delta')
+    assert 'chưa thể kết nối' in answer
+    assert 'SUM(' not in answer
+    assert events[-1]['status'] == 'interrupted'
 
 
 def test_stream_analysis_fallback_is_transparent_when_ai_missing(setup, monkeypatch):
@@ -138,6 +134,7 @@ def test_stream_analysis_fallback_is_transparent_when_ai_missing(setup, monkeypa
     events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
     assert events[0]['route'] == 'ai'
     text = ''.join(e.get('text', '') for e in events if e.get('type') == 'delta')
-    assert 'AI tạm thời không khả dụng' in text
-    assert 'Phần phân tích/tổng hợp bằng AI chưa được thực hiện' in text
-    assert events[-1]['status'] == 'fallback_not_configured'
+    assert 'An Tâm AI hiện chưa thể kết nối' in text
+    assert 'Phần phân tích/tổng hợp bằng AI chưa được thực hiện' not in text
+    assert events[-1]['status'] == 'interrupted'
+    assert 'SUM(total)' not in text
