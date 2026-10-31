@@ -451,10 +451,10 @@ def _fallback_chat_plan(question, role):
     if system_catalog_query or invoice_detail_query:
         calls.append(ChatToolCall(name='system_data', query=question))
 
-    if re.search(r'het han|sap het han|han dung|con .*ngay', s):
+    if re.search(r'het han|can han|gan het han|han dung|con .*ngay', s):
         days_match = re.search(r'(\d{1,3})\s*ngay', s)
         calls.append(ChatToolCall(
-            name='expiry_alerts',
+            name='expiry_alerts', query=question,
             days=min(365, max(1, int(days_match.group(1)) if days_match else 90)),
         ))
 
@@ -586,8 +586,39 @@ def _tool_inventory_search(db, query, role):
     return data, sources
 
 
-def _tool_expiry(db, days):
-    rows = alerts(db, days)['expiry'][:30]
+def _expiry_scope(question):
+    """Differentiate overdue lots from upcoming lots using Vietnamese terms.
+
+    An unqualified request for expiry *alerts* retains both groups (as the
+    dashboard does); a request for *sắp/cận hạn* returns only upcoming lots.
+    Today-expiring lots are treated as unsellable, consistent with FEFO checkout.
+    """
+    q = plain(question or '')
+    upcoming = bool(re.search(r'sap het han|can han|gan het han|sap den han', q))
+    overdue = bool(re.search(r'da het han|qua han|het han roi|het han truoc', q))
+    if upcoming and overdue:
+        return 'all'
+    if overdue:
+        return 'expired'
+    if upcoming or re.search(r'het han trong\s+\d+\s*ngay', q):
+        return 'upcoming'
+    return 'all'
+
+
+def _expiry_rows(db, days, question=''):
+    # Filter BEFORE the 30-row cap: older expired lots must not hide lots
+    # expiring soon. The general /api/alerts endpoint remains unchanged.
+    rows = alerts(db, days)['expiry']
+    scope = _expiry_scope(question)
+    if scope == 'upcoming':
+        rows = [r for r in rows if r['days_left'] > 0]
+    elif scope == 'expired':
+        rows = [r for r in rows if r['days_left'] <= 0]
+    return rows
+
+
+def _tool_expiry(db, days, query=''):
+    rows = _expiry_rows(db, days, query)[:30]
     data = [{k: (str(v) if k in ('expiry_date','received_date','purchase_price','sale_price') else v) for k, v in r.items() if k in ('id','medicine_name','code','quantity','unit','expiry_date','days_left','sale_price')} for r in rows]
     sources = [{'id': f"batch:{r['id']}", 'title': f"{r['medicine_name']} · {r['code']}", 'reference': f"Lô #{r['id']}", 'kind': 'internal'} for r in rows]
     return data, sources
@@ -761,15 +792,16 @@ def _tool_alert_counts(db, query, days=90):
     """Exact number of qualifying lots or low-stock medicines."""
     q=plain(query)
     data=alerts(db,days)
+    expiry_rows = _expiry_rows(db, days, query)
     if re.search(r'ton thap|ton kho thap|duoi nguong|sap het hang',q):
         label='Thuốc tồn kho thấp'
         value=len(data['low_stock'])
     elif re.search(r'loai thuoc|thuoc',q) and not re.search(r'bao nhieu lo|so lo',q):
         label='Loại thuốc có lô sắp/hết hạn'
-        value=len({r['medicine_id'] for r in data['expiry']})
+        value=len({r['medicine_id'] for r in expiry_rows})
     else:
         label='Lô cần chú ý theo hạn dùng'
-        value=len(data['expiry'])
+        value=len(expiry_rows)
     return {'metric':label,'count':value,'days':days}, [
         {'id':'alerts:counts','title':'Thống kê cảnh báo','reference':'Dữ liệu lô và tồn thực tế','kind':'internal'}]
 
@@ -833,7 +865,7 @@ def execute_chat_tools(db, plan, user):
         elif call.name == 'inventory_search':
             data, src = _tool_inventory_search(db, call.query, user.role)
         elif call.name == 'expiry_alerts':
-            data, src = _tool_expiry(db, call.days)
+            data, src = _tool_expiry(db, call.days, call.query)
         elif call.name == 'low_stock':
             data, src = _tool_low_stock(db)
         elif call.name == 'stock_risk':
@@ -1117,6 +1149,64 @@ def _recent_subject(request):
     return None, ''
 
 
+def _expiry_context(request):
+    """Return a new, deterministic expiry query from an explicit or follow-up turn.
+
+    Only recent user questions are used to identify the topic, and unrelated
+    turns break context. Do NOT reuse assistant-written figures as evidence.
+    Every new turn executes a fresh authorized database lookup.
+    """
+    q = plain(request.message)
+    expiry_subject = r'sap het han|can han|gan het han|da het han|qua han|han su dung|han dung|het han'
+    explicitly_about_expiry = bool(re.search(expiry_subject, q))
+    # Do not steal broad mixed-metric questions from the advanced agent.
+    unrelated = bool(re.search(r'doanh thu|doanh so|hoa don|gia nhap|nha cung cap|ban chay', q))
+    if unrelated:
+        return None
+    if explicitly_about_expiry:
+        # A stand-alone generic medical question mentioning expiration should
+        # not become a full-stock report without a warehouse/list context.
+        if not re.search(r'lo|thuoc|san pham|kho|canh bao|danh sach|bao cao', q):
+            return None
+        subject=q
+        full_question=request.message
+    else:
+        # Only resolve demonstrative/continuation wording (not every generic
+        # follow-up); prevent unrelated conversations from hijacking the route.
+        referent = bool(re.search(r'cac lo (nay|do|tren)|nhung lo (nay|do)|cac thuoc (nay|do)|'
+                                 r'danh sach (tren|vua)|du lieu (tren|vua)|'
+                                 r'^(hay |vay |the )?(phan tich|tong hop|de xuat|goi y|uu tien|bao cao).*'
+                                 r'(chung|nay|do|tren|tung lo)|^(lo nao can uu tien)', q))
+        if not referent:
+            return None
+        previous = ''
+        for turn in reversed(request.history[-12:]):
+            if turn.role != 'user':
+                continue
+            prior = plain(turn.content)
+            if re.search(expiry_subject, prior):
+                previous = prior
+                break
+            # Permit several successive questions about *these lots*, but
+            # never carry the topic across an unrelated user question.
+            same_lots = bool(re.search(r'cac lo (nay|do|tren)|nhung lo (nay|do)|'
+                                       r'tung lo|lo nao can uu tien|danh sach tren|'
+                                       r'phan tich.*(chung|nay|do|tren)|'
+                                       r'de xuat.*(chung|nay|do|tren)', prior))
+            if not same_lots:
+                return None
+        if not previous:
+            return None
+        subject = previous
+        full_question = request.message + '\nNgữ cảnh lô thuốc (truy vấn lại): ' + previous
+    match = re.search(r'(\d{1,3})\s*ngay', q) or re.search(r'(\d{1,3})\s*ngay', subject)
+    days = min(365, max(1, int(match.group(1)))) if match else 90
+    if explicitly_about_expiry:
+        # Natural question itself carries the scope (upcoming/expired/both).
+        full_question = request.message
+    return full_question, days
+
+
 def _fast_intent(request, role):
     """Use one verified tool + one LLM call for unambiguous intents only."""
     q = plain(request.message.strip())
@@ -1126,6 +1216,14 @@ def _fast_intent(request, role):
         return ChatPlan(calls=[]), request.message
     if role=='manager' and re.search(r'xu huong doanh thu|bieu do doanh thu|do thi doanh thu|doanh thu tung ngay',q) and not re.search(r'so sanh|phan tich|vi sao|nguyen nhan',q):
         return ChatPlan(calls=[ChatToolCall(name='report_view',query=request.message)]),request.message
+    expiry_context = _expiry_context(request)
+    if expiry_context is not None:
+        expiry_query, expiry_days = expiry_context
+        # Counts are exact, lists are capped; both are DB-driven, never a
+        # model-selected tool call that might incorrectly report no records.
+        if re.search(r'bao nhieu|co may|dem so|tong so', q) and not _COMPLEX_REQUEST.search(q):
+            return ChatPlan(calls=[ChatToolCall(name='alert_counts', query=expiry_query, days=expiry_days)]), request.message
+        return ChatPlan(calls=[ChatToolCall(name='expiry_alerts', query=expiry_query, days=expiry_days)]), request.message
     if _COMPLEX_REQUEST.search(q):
         return None
     if not re.search(r'thuoc|duoc|lo (thuoc|nhap)|ma lo|\bkho\b|\bton\b|nha cung cap|nhom|danh muc|hoa don|doanh|gia (nhap|ban)|ban hang|hang hoa|kiem ke|quy trinh|huong dan|nhan vien|tai khoan|phan quyen|so luong|bao nhieu|lich su|doi gia|thang|hom nay|hom qua|tuan|he thong|an tam|nha thuoc|thu ngan|quan ly|duoc si|sap het han|ke don|dang kinh doanh|ngung kinh doanh|thong tin tham khao|nguong canh bao|nguon thong tin', q):
@@ -1204,7 +1302,7 @@ def _fast_intent(request, role):
     days_match = re.search(r'(\d{1,3})\s*ngay',q)
     days = max(1, min(365, int(days_match.group(1)))) if days_match else 90
     if re.search(r'^(cac |nhung |danh sach |co |hien )?(lo |thuoc )?(sap het han|da het han|het han trong)|lo thuoc.*sap het han',q):
-        return ChatPlan(calls=[ChatToolCall(name='expiry_alerts',days=days)]), request.message
+        return ChatPlan(calls=[ChatToolCall(name='expiry_alerts',query=request.message,days=days)]), request.message
     if re.search(r'ton (kho )?(thap|duoi nguong)|thuoc sap het hang|thuoc can nhap them',q):
         return ChatPlan(calls=[ChatToolCall(name='low_stock')]), request.message
     if re.search(r'thuoc (nao|gi) ban cham|thuoc (nao|gi) ton nhieu|ton kho lau|thuoc ban cham',q):
@@ -1344,8 +1442,21 @@ def _response_focus(question):
 
 
 def _stream_prompt(request, user, results):
+    expiry_rows = next((r.get('data') for r in results if r.get('tool') == 'expiry_alerts' and not r.get('error')), None)
+    evidence = ''
+    if isinstance(expiry_rows, list):
+        current = sum(1 for r in expiry_rows if isinstance(r, dict) and isinstance(r.get('days_left'), int) and r['days_left'] > 0)
+        expired = sum(1 for r in expiry_rows if isinstance(r, dict) and isinstance(r.get('days_left'), int) and r['days_left'] <= 0)
+        evidence = ('\nVERIFIED_EXPIRY_RESULT: Bộ lọc SQL vừa trả về '
+                    + str(len(expiry_rows)) + ' lô (sắp hết hạn: ' + str(current)
+                    + ', đã hết hạn/đến hạn hôm nay: ' + str(expired) + '). '
+                    + ('Có dữ liệu thực: nghiêm cấm nói không có lô phù hợp. '
+                       'Chỉ phân tích số lô trong TOOL_RESULTS; tách đúng nhóm hạn dùng.'
+                       if expiry_rows else 'Không có lô phù hợp bộ lọc hiện tại; không suy diễn toàn kho không có lô. ')
+                    + 'Không dùng số liệu trong HISTORY làm dữ liệu mới.\n')
     return (
-        'ROLE: ' + user.role
+        evidence
+        + 'ROLE: ' + user.role
         + '\nANSWER_TARGET: ' + _response_focus(request.message)
         + '\nHISTORY (for context only, not fresh facts):\n' + _history_text(request.history)
         + '\nQUESTION:\n' + request.message
